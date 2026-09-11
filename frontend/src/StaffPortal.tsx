@@ -25,14 +25,25 @@ import {
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
 import { useAuth } from './auth/AuthContext';
 import api from './api/client';
+import {
+  apiErrorMessage,
+  formatLeaveApplied,
+  formatLeaveDates,
+  leaveFullName,
+  leaveRoll,
+  leaveStatusLabel,
+  type ApiLeave,
+} from './lib/leave';
 import { mediaUrl } from './lib/media';
 import {
   Avatar,
   Badge,
   Card,
   IconButton,
+  Modal,
   OverflowMenu,
   PersonCell,
+  PostMedia,
   PrimaryButton,
   SectionHeader,
   StatCard,
@@ -52,7 +63,6 @@ type PageId =
   | 'announcements';
 
 type Mark = 'P' | 'A' | 'L';
-type LeaveStatus = 'Approved' | 'Pending' | 'Rejected';
 
 const TEACHER = { name: 'Kavya Menon', role: 'English Teacher', department: 'English Department' };
 
@@ -116,19 +126,35 @@ const GRADE_ROWS = [
   { name: 'Lakshmi Pillai', className: 'Grade 10 - A', assessment: 'Macbeth scene analysis', score: '81 / 100' },
 ];
 
-const LEAVE_ROWS: { id: string; dates: string; reason: string; applied: string; status: LeaveStatus }[] = [
-  { id: 'l1', dates: '18–20 Sep 2026', reason: 'Family function', applied: '5 Sep 2026', status: 'Pending' },
-  { id: 'l2', dates: '12 Jun 2026', reason: 'Medical', applied: '10 Jun 2026', status: 'Approved' },
-  { id: 'l3', dates: '3 Mar 2026', reason: 'Personal', applied: '1 Mar 2026', status: 'Rejected' },
-  { id: 'l4', dates: '22–23 Jan 2026', reason: 'Family travel', applied: '15 Jan 2026', status: 'Approved' },
-];
+type FeedPost = {
+  id: string;
+  title: string;
+  content: string;
+  audience: string;
+  createdAt: string;
+  fileUrl?: string | null;
+  mediaType?: string | null;
+  author?: { firstName?: string; lastName?: string } | null;
+  targetClass?: { name?: string } | null;
+};
 
-const ANNOUNCEMENTS = [
-  { id: 'a1', author: 'Divya Menon', tone: 'blue' as BadgeTone, date: '8 Sep 2026', title: 'Term 2 parent-teacher meeting on 19 September' },
-  { id: 'a2', author: 'Suresh Pillai', tone: 'green' as BadgeTone, date: '6 Sep 2026', title: 'Science practical schedule for Term 2' },
-  { id: 'a3', author: 'Divya Menon', tone: 'slate' as BadgeTone, date: '4 Sep 2026', title: 'Staff meeting — Friday 3:00 PM, Conference Room' },
-  { id: 'a4', author: 'Exam cell', tone: 'amber' as BadgeTone, date: '1 Sep 2026', title: 'Unit test window: 15–19 September' },
-];
+function formatAnnouncementDate(value?: string) {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  return date.toLocaleDateString(undefined, {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+  });
+}
+
+function announcementTone(audience: string): BadgeTone {
+  if (audience === 'ALL') return 'blue';
+  if (audience === 'STAFF' || audience === 'ADMIN') return 'slate';
+  if (audience === 'STUDENT') return 'green';
+  return 'amber';
+}
 
 type ChatMessage = { id: string; from: 'in' | 'out'; text: string; time: string };
 type Thread = {
@@ -235,9 +261,9 @@ function markLabel(mark: Mark) {
   return 'Late';
 }
 
-function leaveTone(status: LeaveStatus): BadgeTone {
-  if (status === 'Approved') return 'green';
-  if (status === 'Rejected') return 'red';
+function leaveTone(status: string): BadgeTone {
+  if (status === 'Approved' || status === 'APPROVED') return 'green';
+  if (status === 'Rejected' || status === 'REJECTED') return 'red';
   return 'amber';
 }
 
@@ -430,55 +456,60 @@ function StudentFormModal({
   );
 
   return (
-    <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 p-4 sm:items-center">
-      <button type="button" aria-label="Close dialog" className="absolute inset-0" onClick={onClose} />
-      <Card className="relative z-10 w-full max-w-lg p-5 shadow-lg">
-        <div className="mb-4 flex items-start justify-between gap-3">
-          <div>
-            <h2 className="text-lg font-semibold text-gray-900">
-              {mode === 'add' ? 'Add student' : 'Edit student'}
-            </h2>
-            <p className="mt-1 text-sm text-gray-500">
-              {mode === 'add'
-                ? 'Creates a student account in your assigned class.'
-                : 'Update student details for your class.'}
-            </p>
-          </div>
-          <IconButton label="Close" onClick={onClose}>
-            <X className="h-4 w-4" />
-          </IconButton>
+    <Modal onClose={onClose} size="lg">
+      <div className="mb-3 flex items-start justify-between gap-3 sm:mb-4">
+        <div className="min-w-0">
+          <h2 className="text-base font-semibold text-gray-900 sm:text-lg">
+            {mode === 'add' ? 'Add student' : 'Edit student'}
+          </h2>
+          <p className="mt-1 hidden text-sm text-gray-500 sm:block">
+            {mode === 'add'
+              ? 'Creates a student account in your assigned class.'
+              : 'Update student details for your class.'}
+          </p>
         </div>
-        <form onSubmit={onSubmit} className="space-y-3">
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            {field('First name', 'firstName', { required: true })}
-            {field('Last name', 'lastName', { required: true })}
-          </div>
-          {mode === 'add' && (
-            <>
-              {field('Email', 'email', { type: 'email', required: true, placeholder: 'student@school.com' })}
-              {field('Password', 'password', { type: 'password', required: true })}
+        <IconButton label="Close" onClick={onClose} className="shrink-0">
+          <X className="h-4 w-4" />
+        </IconButton>
+      </div>
+      <form onSubmit={onSubmit} className="space-y-2 sm:space-y-3">
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 sm:gap-3">
+          {field('First name', 'firstName', { required: true })}
+          {field('Last name', 'lastName', { required: true })}
+        </div>
+        {mode === 'add' && (
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 sm:gap-3">
+            {field('Email', 'email', { type: 'email', required: true, placeholder: 'student@school.com' })}
+            {field('Password', 'password', { type: 'password', required: true })}
+            <div className="sm:col-span-2">
               {field('Student / Roll ID', 'studentId', { required: true, placeholder: '9A-12' })}
-            </>
-          )}
+            </div>
+          </div>
+        )}
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 sm:gap-3">
           {field('Parent name', 'parentName')}
           {field('Parent phone', 'parentPhone', { placeholder: '9876543210' })}
-          {field('Address', 'address')}
-          {error && <p className="text-sm text-red-600">{error}</p>}
-          <div className="flex flex-col-reverse gap-2 pt-2 sm:flex-row sm:justify-end">
-            <button
-              type="button"
-              onClick={onClose}
-              className="inline-flex h-10 items-center justify-center rounded-lg border border-gray-200 px-4 text-sm font-medium text-gray-700 hover:bg-gray-50"
-            >
-              Cancel
-            </button>
-            <PrimaryButton type="submit" icon={mode === 'add' ? <Plus className="h-4 w-4" /> : <Check className="h-4 w-4" />}>
-              {busy ? 'Saving...' : mode === 'add' ? 'Add student' : 'Save changes'}
-            </PrimaryButton>
-          </div>
-        </form>
-      </Card>
-    </div>
+          <div className="sm:col-span-2">{field('Address', 'address')}</div>
+        </div>
+        {error && <p className="text-sm text-red-600">{error}</p>}
+        <div className="flex flex-col-reverse gap-2 pt-1 sm:flex-row sm:justify-end sm:pt-2">
+          <button
+            type="button"
+            onClick={onClose}
+            className="inline-flex h-11 w-full items-center justify-center rounded-lg border border-gray-200 px-4 text-sm font-medium text-gray-700 hover:bg-gray-50 sm:h-10 sm:w-auto"
+          >
+            Cancel
+          </button>
+          <PrimaryButton
+            type="submit"
+            className="w-full sm:w-auto"
+            icon={mode === 'add' ? <Plus className="h-4 w-4" /> : <Check className="h-4 w-4" />}
+          >
+            {busy ? 'Saving...' : mode === 'add' ? 'Add student' : 'Save changes'}
+          </PrimaryButton>
+        </div>
+      </form>
+    </Modal>
   );
 }
 
@@ -1385,130 +1416,387 @@ function AssignmentsPage() {
       </div>
 
       {showCreate && (
-        <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 p-4 sm:items-center">
-          <button type="button" aria-label="Close" className="absolute inset-0" onClick={() => setShowCreate(false)} />
-          <Card className="relative z-10 w-full max-w-lg p-5">
-            <div className="mb-4 flex items-start justify-between">
-              <h2 className="text-lg font-semibold text-gray-900">New assignment</h2>
-              <IconButton label="Close" onClick={() => setShowCreate(false)}>
-                <X className="h-4 w-4" />
-              </IconButton>
-            </div>
-            <form onSubmit={createAssignment} className="space-y-3">
+        <Modal onClose={() => setShowCreate(false)} size="md">
+          <div className="mb-3 flex items-start justify-between sm:mb-4">
+            <h2 className="text-base font-semibold text-gray-900 sm:text-lg">New assignment</h2>
+            <IconButton label="Close" onClick={() => setShowCreate(false)} className="shrink-0">
+              <X className="h-4 w-4" />
+            </IconButton>
+          </div>
+          <form onSubmit={createAssignment} className="space-y-2 sm:space-y-3">
+            <label className="block text-sm text-gray-700">
+              Title
+              <input
+                required
+                value={createForm.title}
+                onChange={(e) => setCreateForm({ ...createForm, title: e.target.value })}
+                className="mt-1.5 h-10 w-full rounded-lg border border-gray-200 px-3 text-sm focus:border-blue-600 focus:outline-none focus:ring-1 focus:ring-blue-600"
+              />
+            </label>
+            <label className="block text-sm text-gray-700">
+              Description
+              <textarea
+                required
+                rows={3}
+                value={createForm.description}
+                onChange={(e) => setCreateForm({ ...createForm, description: e.target.value })}
+                className="mt-1.5 w-full resize-none rounded-lg border border-gray-200 px-3 py-2 text-sm focus:border-blue-600 focus:outline-none focus:ring-1 focus:ring-blue-600"
+              />
+            </label>
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 sm:gap-3">
               <label className="block text-sm text-gray-700">
-                Title
+                Subject
                 <input
                   required
-                  value={createForm.title}
-                  onChange={(e) => setCreateForm({ ...createForm, title: e.target.value })}
+                  value={createForm.subject}
+                  onChange={(e) => setCreateForm({ ...createForm, subject: e.target.value })}
                   className="mt-1.5 h-10 w-full rounded-lg border border-gray-200 px-3 text-sm focus:border-blue-600 focus:outline-none focus:ring-1 focus:ring-blue-600"
                 />
               </label>
               <label className="block text-sm text-gray-700">
-                Description
-                <textarea
+                Due date
+                <input
                   required
-                  rows={3}
-                  value={createForm.description}
-                  onChange={(e) => setCreateForm({ ...createForm, description: e.target.value })}
-                  className="mt-1.5 w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:border-blue-600 focus:outline-none focus:ring-1 focus:ring-blue-600"
+                  type="date"
+                  value={createForm.dueDate}
+                  onChange={(e) => setCreateForm({ ...createForm, dueDate: e.target.value })}
+                  className="mt-1.5 h-10 w-full rounded-lg border border-gray-200 px-3 text-sm focus:border-blue-600 focus:outline-none focus:ring-1 focus:ring-blue-600"
                 />
               </label>
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                <label className="block text-sm text-gray-700">
-                  Subject
-                  <input
-                    required
-                    value={createForm.subject}
-                    onChange={(e) => setCreateForm({ ...createForm, subject: e.target.value })}
-                    className="mt-1.5 h-10 w-full rounded-lg border border-gray-200 px-3 text-sm focus:border-blue-600 focus:outline-none focus:ring-1 focus:ring-blue-600"
-                  />
-                </label>
-                <label className="block text-sm text-gray-700">
-                  Due date
-                  <input
-                    required
-                    type="date"
-                    value={createForm.dueDate}
-                    onChange={(e) => setCreateForm({ ...createForm, dueDate: e.target.value })}
-                    className="mt-1.5 h-10 w-full rounded-lg border border-gray-200 px-3 text-sm focus:border-blue-600 focus:outline-none focus:ring-1 focus:ring-blue-600"
-                  />
-                </label>
-              </div>
-              {createError && <p className="text-sm text-red-600">{createError}</p>}
-              <div className="flex justify-end gap-2 pt-2">
-                <button
-                  type="button"
-                  onClick={() => setShowCreate(false)}
-                  className="h-10 rounded-lg border border-gray-200 px-4 text-sm font-medium text-gray-700"
-                >
-                  Cancel
-                </button>
-                <PrimaryButton type="submit">{createBusy ? 'Creating...' : 'Create'}</PrimaryButton>
-              </div>
-            </form>
-          </Card>
-        </div>
+            </div>
+            {createError && <p className="text-sm text-red-600">{createError}</p>}
+            <div className="flex flex-col-reverse gap-2 pt-1 sm:flex-row sm:justify-end sm:pt-2">
+              <button
+                type="button"
+                onClick={() => setShowCreate(false)}
+                className="inline-flex h-11 w-full items-center justify-center rounded-lg border border-gray-200 px-4 text-sm font-medium text-gray-700 hover:bg-gray-50 sm:h-10 sm:w-auto"
+              >
+                Cancel
+              </button>
+              <PrimaryButton type="submit" className="w-full sm:w-auto">
+                {createBusy ? 'Creating...' : 'Create'}
+              </PrimaryButton>
+            </div>
+          </form>
+        </Modal>
       )}
     </>
   );
 }
 
 function LeavePage() {
+  const { user } = useAuth();
+  const [items, setItems] = useState<ApiLeave[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [modalOpen, setModalOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [reviewBusyId, setReviewBusyId] = useState<string | null>(null);
+  const [formError, setFormError] = useState('');
+  const [form, setForm] = useState({ reason: '', startDate: '', endDate: '' });
+
+  const load = async () => {
+    setError('');
+    try {
+      const { data } = await api.get('/leave');
+      setItems(data);
+    } catch {
+      setError('Could not load leave requests.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    load().catch(console.error);
+  }, []);
+
+  const myLeave = items.filter((item) => item.requesterId === user?.id);
+  const studentLeave = items.filter((item) => item.requester?.role === 'STUDENT');
+  const pendingStudents = studentLeave.filter((item) => item.status === 'PENDING').length;
+
+  const openModal = () => {
+    setForm({ reason: '', startDate: '', endDate: '' });
+    setFormError('');
+    setModalOpen(true);
+  };
+
+  const onSubmit = async (event: FormEvent) => {
+    event.preventDefault();
+    setBusy(true);
+    setFormError('');
+    try {
+      await api.post('/leave', {
+        reason: form.reason.trim(),
+        startDate: form.startDate,
+        endDate: form.endDate,
+      });
+      setModalOpen(false);
+      await load();
+    } catch (err: unknown) {
+      setFormError(apiErrorMessage(err, 'Could not submit leave request'));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const review = async (id: string, status: 'APPROVED' | 'REJECTED') => {
+    setReviewBusyId(id);
+    setError('');
+    try {
+      await api.patch(`/leave/${id}/review`, { status });
+      await load();
+    } catch (err: unknown) {
+      setError(apiErrorMessage(err, 'Could not update leave request'));
+    } finally {
+      setReviewBusyId(null);
+    }
+  };
+
   return (
     <>
       <SectionHeader
         title="Leave"
-        subtitle="Your leave balance and requests"
-        action={<PrimaryButton icon={<Plus className="h-4 w-4" />}>Apply for leave</PrimaryButton>}
+        subtitle="Apply for your leave and review student requests from your class"
+        action={
+          <PrimaryButton icon={<Plus className="h-4 w-4" />} onClick={openModal}>
+            Apply for leave
+          </PrimaryButton>
+        }
       />
+
       <div className="mb-5 grid grid-cols-1 gap-3 sm:grid-cols-3 lg:gap-4">
-        <StatCard label="Leave taken this year" value="4 days" subtext="of 12 casual + medical" icon={<CalendarOff className="h-4 w-4" />} />
-        <StatCard label="Pending requests" value="1" subtext="18–20 September" icon={<Bell className="h-4 w-4" />} />
-        <StatCard label="Balance remaining" value="8 days" subtext="Resets in April 2027" icon={<Check className="h-4 w-4" />} />
+        <StatCard
+          label="My requests"
+          value={String(myLeave.length)}
+          subtext={`${myLeave.filter((item) => item.status === 'PENDING').length} pending`}
+          icon={<CalendarOff className="h-4 w-4" />}
+        />
+        <StatCard
+          label="Student requests"
+          value={String(studentLeave.length)}
+          subtext={`${pendingStudents} awaiting review`}
+          icon={<Users className="h-4 w-4" />}
+        />
+        <StatCard
+          label="Pending reviews"
+          value={String(pendingStudents)}
+          subtext="Class students only"
+          icon={<Bell className="h-4 w-4" />}
+        />
       </div>
-      <div className="space-y-3 md:hidden">
-        {LEAVE_ROWS.map((row) => (
-          <Card key={row.id} className="p-4">
-            <div className="flex items-start justify-between gap-2">
-              <div>
-                <p className="font-medium text-gray-900">{row.dates}</p>
-                <p className="mt-1 text-sm text-gray-500">{row.reason}</p>
-              </div>
-              <OverflowMenu />
+
+      {loading && <p className="text-sm text-gray-500">Loading leave requests...</p>}
+      {error && <p className="mb-4 text-sm text-red-600">{error}</p>}
+
+      {!loading && (
+        <>
+          <h2 className="mb-3 text-base font-semibold text-gray-900">Student leave requests</h2>
+          <div className="mb-8 space-y-3 md:hidden">
+            {studentLeave.map((row) => (
+              <Card key={row.id} className="p-4">
+                <div className="flex items-start justify-between gap-2">
+                  <PersonCell
+                    name={leaveFullName(row)}
+                    sub={`Roll ${leaveRoll(row)}`}
+                  />
+                  <Badge tone={leaveTone(row.status)}>{leaveStatusLabel(row.status)}</Badge>
+                </div>
+                <dl className="mt-3 space-y-2 text-sm">
+                  <div className="flex justify-between gap-3">
+                    <dt className="text-gray-400">Dates</dt>
+                    <dd className="text-gray-700">{formatLeaveDates(row.startDate, row.endDate)}</dd>
+                  </div>
+                  <div className="flex justify-between gap-3">
+                    <dt className="text-gray-400">Reason</dt>
+                    <dd className="text-right text-gray-700">{row.reason}</dd>
+                  </div>
+                </dl>
+                {row.status === 'PENDING' && (
+                  <div className="mt-3 flex gap-2">
+                    <PrimaryButton
+                      className="flex-1"
+                      onClick={() => review(row.id, 'APPROVED')}
+                    >
+                      {reviewBusyId === row.id ? 'Saving...' : 'Approve'}
+                    </PrimaryButton>
+                    <button
+                      type="button"
+                      onClick={() => review(row.id, 'REJECTED')}
+                      className="inline-flex h-10 flex-1 items-center justify-center rounded-lg border border-red-200 px-4 text-sm font-medium text-red-600 hover:bg-red-50"
+                    >
+                      Reject
+                    </button>
+                  </div>
+                )}
+              </Card>
+            ))}
+            {!studentLeave.length && (
+              <Card className="p-6 text-center">
+                <p className="text-sm text-gray-500">No student leave requests for your class.</p>
+              </Card>
+            )}
+          </div>
+
+          <div className="mb-8 hidden md:block">
+            <TableShell columns={['Student', 'Roll no.', 'Dates', 'Reason', 'Status', '']}>
+              {studentLeave.map((row) => (
+                <tr key={row.id} className="hover:bg-gray-50">
+                  <td className="px-4 py-3">
+                    <PersonCell name={leaveFullName(row)} />
+                  </td>
+                  <td className="px-4 py-3 text-gray-500">{leaveRoll(row)}</td>
+                  <td className="px-4 py-3 text-gray-500">
+                    {formatLeaveDates(row.startDate, row.endDate)}
+                  </td>
+                  <td className="px-4 py-3 text-gray-500">{row.reason}</td>
+                  <td className="px-4 py-3">
+                    <Badge tone={leaveTone(row.status)}>{leaveStatusLabel(row.status)}</Badge>
+                  </td>
+                  <td className="px-2 py-3 text-right">
+                    {row.status === 'PENDING' ? (
+                      <div className="flex items-center justify-end gap-1">
+                        <IconButton
+                          label={`Approve leave for ${leaveFullName(row)}`}
+                          onClick={() => review(row.id, 'APPROVED')}
+                          className="text-green-600 hover:bg-green-50 hover:text-green-700"
+                        >
+                          <Check className="h-4 w-4" />
+                        </IconButton>
+                        <IconButton
+                          label={`Reject leave for ${leaveFullName(row)}`}
+                          onClick={() => review(row.id, 'REJECTED')}
+                          className="text-red-600 hover:bg-red-50 hover:text-red-700"
+                        >
+                          <X className="h-4 w-4" />
+                        </IconButton>
+                      </div>
+                    ) : null}
+                  </td>
+                </tr>
+              ))}
+            </TableShell>
+            {!studentLeave.length && (
+              <Card className="mt-3 p-6 text-center">
+                <p className="text-sm text-gray-500">No student leave requests for your class.</p>
+              </Card>
+            )}
+          </div>
+
+          <h2 className="mb-3 text-base font-semibold text-gray-900">My leave</h2>
+          <div className="space-y-3 md:hidden">
+            {myLeave.map((row) => (
+              <Card key={row.id} className="p-4">
+                <div className="flex items-start justify-between gap-2">
+                  <div>
+                    <p className="font-medium text-gray-900">
+                      {formatLeaveDates(row.startDate, row.endDate)}
+                    </p>
+                    <p className="mt-1 text-sm text-gray-500">{row.reason}</p>
+                  </div>
+                  <Badge tone={leaveTone(row.status)}>{leaveStatusLabel(row.status)}</Badge>
+                </div>
+                <dl className="mt-3 space-y-2 text-sm">
+                  <div className="flex justify-between gap-3">
+                    <dt className="text-gray-400">Applied on</dt>
+                    <dd className="text-gray-700">{formatLeaveApplied(row.createdAt)}</dd>
+                  </div>
+                </dl>
+              </Card>
+            ))}
+            {!myLeave.length && (
+              <Card className="p-6 text-center">
+                <p className="text-sm text-gray-500">You have not applied for leave yet.</p>
+              </Card>
+            )}
+          </div>
+
+          <div className="hidden md:block">
+            <TableShell columns={['Dates', 'Reason', 'Applied on', 'Status']}>
+              {myLeave.map((row) => (
+                <tr key={row.id} className="hover:bg-gray-50">
+                  <td className="px-4 py-3 font-medium text-gray-900">
+                    {formatLeaveDates(row.startDate, row.endDate)}
+                  </td>
+                  <td className="px-4 py-3 text-gray-500">{row.reason}</td>
+                  <td className="px-4 py-3 text-gray-500">{formatLeaveApplied(row.createdAt)}</td>
+                  <td className="px-4 py-3">
+                    <Badge tone={leaveTone(row.status)}>{leaveStatusLabel(row.status)}</Badge>
+                  </td>
+                </tr>
+              ))}
+            </TableShell>
+            {!myLeave.length && (
+              <Card className="mt-3 p-6 text-center">
+                <p className="text-sm text-gray-500">You have not applied for leave yet.</p>
+              </Card>
+            )}
+          </div>
+        </>
+      )}
+
+      {modalOpen && (
+        <Modal onClose={() => !busy && setModalOpen(false)} size="md">
+          <div className="mb-3 flex items-start justify-between gap-3 sm:mb-4">
+            <div>
+              <h2 className="text-base font-semibold text-gray-900 sm:text-lg">Apply for leave</h2>
+              <p className="mt-1 hidden text-sm text-gray-500 sm:block">
+                Admin will review your leave request.
+              </p>
             </div>
-            <dl className="mt-3 space-y-2 text-sm">
-              <div className="flex justify-between gap-3">
-                <dt className="text-gray-400">Applied on</dt>
-                <dd className="text-gray-700">{row.applied}</dd>
-              </div>
-              <div className="flex items-center justify-between gap-3">
-                <dt className="text-gray-400">Status</dt>
-                <dd>
-                  <Badge tone={leaveTone(row.status)}>{row.status}</Badge>
-                </dd>
-              </div>
-            </dl>
-          </Card>
-        ))}
-      </div>
-      <div className="hidden md:block">
-        <TableShell columns={['Dates', 'Reason', 'Applied on', 'Status', '']}>
-          {LEAVE_ROWS.map((row) => (
-            <tr key={row.id} className="hover:bg-gray-50">
-              <td className="px-4 py-3 font-medium text-gray-900">{row.dates}</td>
-              <td className="px-4 py-3 text-gray-500">{row.reason}</td>
-              <td className="px-4 py-3 text-gray-500">{row.applied}</td>
-              <td className="px-4 py-3">
-                <Badge tone={leaveTone(row.status)}>{row.status}</Badge>
-              </td>
-              <td className="px-2 py-3 text-right">
-                <OverflowMenu />
-              </td>
-            </tr>
-          ))}
-        </TableShell>
-      </div>
+            <IconButton label="Close" onClick={() => !busy && setModalOpen(false)} className="shrink-0">
+              <X className="h-4 w-4" />
+            </IconButton>
+          </div>
+          <form onSubmit={onSubmit} className="space-y-2 sm:space-y-3">
+            <label className="block text-sm text-gray-700">
+              Reason
+              <textarea
+                required
+                rows={3}
+                value={form.reason}
+                onChange={(event) => setForm({ ...form, reason: event.target.value })}
+                className="mt-1.5 w-full resize-none rounded-lg border border-gray-200 px-3 py-2 text-sm focus:border-blue-600 focus:outline-none focus:ring-1 focus:ring-blue-600"
+              />
+            </label>
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 sm:gap-3">
+              <label className="block text-sm text-gray-700">
+                Start date
+                <input
+                  required
+                  type="date"
+                  value={form.startDate}
+                  onChange={(event) => setForm({ ...form, startDate: event.target.value })}
+                  className="mt-1.5 h-10 w-full rounded-lg border border-gray-200 px-3 text-sm focus:border-blue-600 focus:outline-none focus:ring-1 focus:ring-blue-600"
+                />
+              </label>
+              <label className="block text-sm text-gray-700">
+                End date
+                <input
+                  required
+                  type="date"
+                  value={form.endDate}
+                  onChange={(event) => setForm({ ...form, endDate: event.target.value })}
+                  className="mt-1.5 h-10 w-full rounded-lg border border-gray-200 px-3 text-sm focus:border-blue-600 focus:outline-none focus:ring-1 focus:ring-blue-600"
+                />
+              </label>
+            </div>
+            {formError && <p className="text-sm text-red-600">{formError}</p>}
+            <div className="flex flex-col-reverse gap-2 pt-1 sm:flex-row sm:justify-end sm:pt-2">
+              <button
+                type="button"
+                onClick={() => !busy && setModalOpen(false)}
+                className="inline-flex h-11 w-full items-center justify-center rounded-lg border border-gray-200 px-4 text-sm font-medium text-gray-700 hover:bg-gray-50 sm:h-10 sm:w-auto"
+              >
+                Cancel
+              </button>
+              <PrimaryButton type="submit" className="w-full sm:w-auto">
+                {busy ? 'Submitting...' : 'Submit request'}
+              </PrimaryButton>
+            </div>
+          </form>
+        </Modal>
+      )}
     </>
   );
 }
@@ -1664,25 +1952,65 @@ function MessagesPage() {
 }
 
 function AnnouncementsPage() {
+  const [posts, setPosts] = useState<FeedPost[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      setError('');
+      try {
+        const { data } = await api.get('/posts/feed');
+        if (active) setPosts(data);
+      } catch {
+        if (active) setError('Could not load announcements.');
+      } finally {
+        if (active) setLoading(false);
+      }
+    })().catch(console.error);
+    return () => {
+      active = false;
+    };
+  }, []);
+
   return (
     <>
       <SectionHeader title="Announcements" subtitle="School notices and staff updates" />
-      <div className="space-y-3">
-        {ANNOUNCEMENTS.map((item) => (
-          <Card key={item.id} className="p-4 md:p-5">
-            <div className="flex items-start gap-3">
-              <div className="min-w-0 flex-1">
-                <div className="flex flex-wrap items-center gap-2">
-                  <Badge tone={item.tone}>{item.author}</Badge>
-                  <span className="text-xs text-gray-400">{item.date}</span>
+      {loading && <p className="text-sm text-gray-500">Loading announcements...</p>}
+      {error && <p className="mb-4 text-sm text-red-600">{error}</p>}
+      {!loading && !error && (
+        <div className="space-y-3">
+          {posts.map((item) => {
+            const author = `${item.author?.firstName ?? ''} ${item.author?.lastName ?? ''}`.trim();
+            const mediaSrc = mediaUrl(item.fileUrl);
+            return (
+              <Card key={item.id} className="p-4 md:p-5">
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Badge tone={announcementTone(item.audience)}>
+                      {author || 'Announcement'}
+                    </Badge>
+                    <span className="text-xs text-gray-400">
+                      {formatAnnouncementDate(item.createdAt)}
+                    </span>
+                  </div>
+                  <h2 className="mt-2 font-semibold text-gray-900">{item.title}</h2>
+                  {item.content && (
+                    <p className="mt-1 whitespace-pre-wrap text-sm text-gray-600">{item.content}</p>
+                  )}
+                  <PostMedia src={mediaSrc} mediaType={item.mediaType} />
                 </div>
-                <h2 className="mt-2 font-semibold text-gray-900">{item.title}</h2>
-              </div>
-              <OverflowMenu />
-            </div>
-          </Card>
-        ))}
-      </div>
+              </Card>
+            );
+          })}
+          {!posts.length && (
+            <Card className="p-6 text-center">
+              <p className="text-sm text-gray-500">No announcements for you yet.</p>
+            </Card>
+          )}
+        </div>
+      )}
     </>
   );
 }

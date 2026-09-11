@@ -55,4 +55,12 @@ export class RegisterDto {
   @IsOptional()
   @IsString()
   parentPhone?: string;
+
+  @IsOptional()
+  @IsString()
+  enrollmentDate?: string;
+
+  @IsOptional()
+  @IsString()
+  teacherEmail?: string;
 }

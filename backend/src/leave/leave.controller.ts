@@ -27,9 +27,9 @@ export class LeaveController {
   @Roles(UserRole.ADMIN, UserRole.STAFF)
   review(
     @Param('id') id: string,
-    @CurrentUser() user: { id: string },
+    @CurrentUser() user: { id: string; role: UserRole },
     @Body() dto: ReviewLeaveDto,
   ) {
-    return this.leave.review(id, user.id, dto);
+    return this.leave.review(id, user, dto);
   }
 }

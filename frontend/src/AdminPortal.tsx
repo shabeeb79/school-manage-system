@@ -6,30 +6,47 @@ import {
   ChevronLeft,
   ClipboardCheck,
   GraduationCap,
+  Image,
   LayoutDashboard,
   Megaphone,
   Menu,
   MessageSquare,
   LogOut,
   Paperclip,
+  Pencil,
   Plus,
   School,
   Search,
   Send,
+  Trash2,
   TrendingDown,
   TrendingUp,
   Users,
+  Video,
   X,
 } from 'lucide-react';
-import { useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react';
 import { useAuth } from './auth/AuthContext';
+import api from './api/client';
+import {
+  apiErrorMessage,
+  formatLeaveDates,
+  leaveClassName,
+  leaveFullName,
+  leaveRoll,
+  leaveStatusLabel,
+  type ApiLeave,
+} from './lib/leave';
+import { MAX_MEDIA_BYTES, mediaUrl } from './lib/media';
 import {
   Avatar,
   Badge,
   Card,
   IconButton,
+  Modal,
   OverflowMenu,
   PersonCell,
+  PostMedia,
   PrimaryButton,
   SectionHeader,
   StatCard,
@@ -47,8 +64,6 @@ type PageId =
   | 'grades'
   | 'leave'
   | 'messages';
-
-type LeaveStatus = 'Approved' | 'Pending' | 'Rejected';
 
 const PAGE_LABELS: Record<PageId, string> = {
   dashboard: 'Dashboard',
@@ -73,10 +88,93 @@ const NAV_ITEMS: { id: PageId; label: string; icon: typeof LayoutDashboard }[] =
 ];
 
 function roleTone(role: string): BadgeTone {
-  if (role === 'Admin') return 'blue';
-  if (role === 'Teacher') return 'slate';
-  if (role === 'Student') return 'green';
+  if (role === 'Admin' || role === 'ADMIN') return 'blue';
+  if (role === 'Teacher' || role === 'STAFF') return 'slate';
+  if (role === 'Student' || role === 'STUDENT') return 'green';
   return 'amber';
+}
+
+function displayRole(role: string) {
+  if (role === 'ADMIN') return 'Admin';
+  if (role === 'STAFF') return 'Teacher';
+  if (role === 'STUDENT') return 'Student';
+  return role;
+}
+
+type SchoolClassOption = { id: string; name: string };
+
+type ApiUser = {
+  id: string;
+  email: string;
+  firstName: string;
+  lastName: string;
+  role: 'ADMIN' | 'STAFF' | 'STUDENT';
+  isActive: boolean;
+  createdAt?: string;
+  studentProfile?: {
+    studentId: string;
+    enrollmentDate?: string | null;
+    schoolClassId?: string | null;
+    schoolClass?: { id: string; name: string } | null;
+  } | null;
+  staffProfile?: {
+    employeeId: string;
+    assignedClassId?: string | null;
+    assignedClass?: { id: string; name: string } | null;
+  } | null;
+};
+
+type UserFormRole = 'ADMIN' | 'STAFF' | 'STUDENT';
+
+type UserFormState = {
+  role: UserFormRole;
+  firstName: string;
+  lastName: string;
+  email: string;
+  password: string;
+  studentId: string;
+  schoolClassId: string;
+  teacherEmail: string;
+  enrollmentDate: string;
+  teacherName: string;
+  employeeId: string;
+  assignedClassId: string;
+};
+
+const EMPTY_USER_FORM: UserFormState = {
+  role: 'STUDENT',
+  firstName: '',
+  lastName: '',
+  email: '',
+  password: '',
+  studentId: '',
+  schoolClassId: '',
+  teacherEmail: '',
+  enrollmentDate: '',
+  teacherName: '',
+  employeeId: '',
+  assignedClassId: '',
+};
+
+function toDateInput(value?: string | null) {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  return date.toISOString().slice(0, 10);
+}
+
+function splitTeacherName(fullName: string) {
+  const parts = fullName.trim().split(/\s+/).filter(Boolean);
+  if (!parts.length) return { firstName: '', lastName: '' };
+  if (parts.length === 1) return { firstName: parts[0], lastName: '' };
+  return { firstName: parts[0], lastName: parts.slice(1).join(' ') };
+}
+
+function teacherEmailForClass(users: ApiUser[], classId: string) {
+  const teacher = users.find(
+    (user) => user.role === 'STAFF' && user.staffProfile?.assignedClassId === classId,
+  );
+  return teacher?.email ?? '';
 }
 
 const WEEKLY_ATTENDANCE = [
@@ -95,52 +193,6 @@ const ACTIVITY = [
   { name: 'Fathima Beevi', action: 'entered English grades for Grade 10 - A', time: '2 hr ago' },
   { name: 'Rahul Varma', action: 'submitted Climate change essay', time: '3 hr ago' },
   { name: 'Divya Menon', action: 'approved leave for Arjun Nair', time: '5 hr ago' },
-];
-
-const POSTS = [
-  {
-    id: 'p1',
-    audience: 'All school',
-    tone: 'blue' as BadgeTone,
-    date: '8 Sep 2026',
-    title: 'Term 2 parent-teacher meeting on 19 September',
-    author: 'Divya Menon',
-  },
-  {
-    id: 'p2',
-    audience: 'Grade 9',
-    tone: 'green' as BadgeTone,
-    date: '6 Sep 2026',
-    title: 'Science practical schedule for Term 2',
-    author: 'Suresh Pillai',
-  },
-  {
-    id: 'p3',
-    audience: 'Staff',
-    tone: 'slate' as BadgeTone,
-    date: '4 Sep 2026',
-    title: 'Staff meeting — Friday 3:00 PM, Conference Room',
-    author: 'Divya Menon',
-  },
-  {
-    id: 'p4',
-    audience: 'Grade 8 - A',
-    tone: 'amber' as BadgeTone,
-    date: '2 Sep 2026',
-    title: 'Mathematics unit test on 15 September',
-    author: 'Kavya Menon',
-  },
-];
-
-const USERS = [
-  { id: 'u1', name: 'Divya Menon', role: 'Admin', email: 'divya.menon@greenfield.edu.in', status: 'Active' },
-  { id: 'u2', name: 'Kavya Menon', role: 'Teacher', email: 'kavya.menon@greenfield.edu.in', status: 'Active' },
-  { id: 'u3', name: 'Suresh Pillai', role: 'Teacher', email: 'suresh.pillai@greenfield.edu.in', status: 'Active' },
-  { id: 'u4', name: 'Fathima Beevi', role: 'Teacher', email: 'fathima.beevi@greenfield.edu.in', status: 'Active' },
-  { id: 'u5', name: 'Rahul Varma', role: 'Student', email: 'rahul.varma@student.greenfield.edu.in', status: 'Active' },
-  { id: 'u6', name: 'Arjun Nair', role: 'Student', email: 'arjun.nair@student.greenfield.edu.in', status: 'Suspended' },
-  { id: 'u7', name: 'Meera Krishnan', role: 'Parent', email: 'meera.krishnan@gmail.com', status: 'Active' },
-  { id: 'u8', name: 'Ananya Iyer', role: 'Student', email: 'ananya.iyer@student.greenfield.edu.in', status: 'Active' },
 ];
 
 const CLASSES = [
@@ -169,21 +221,6 @@ const GRADE_ROWS = [
   { subject: 'Science', section: 'Grade 9 - B', average: 78, trend: 'up' as const, top: 'Rahul Varma' },
   { subject: 'Social Studies', section: 'Grade 7 - C', average: 84, trend: 'up' as const, top: 'Sneha Menon' },
   { subject: 'Mathematics', section: 'Grade 11 - Science', average: 72, trend: 'down' as const, top: 'Mohammed Irfan' },
-];
-
-const INITIAL_LEAVE: {
-  id: string;
-  name: string;
-  role: string;
-  dates: string;
-  reason: string;
-  status: LeaveStatus;
-}[] = [
-  { id: 'l1', name: 'Kavya Menon', role: 'Teacher', dates: '18–20 Sep', reason: 'Family function', status: 'Pending' },
-  { id: 'l2', name: 'Rahul Varma', role: 'Student', dates: '12 Sep', reason: 'Fever', status: 'Approved' },
-  { id: 'l3', name: 'Suresh Pillai', role: 'Teacher', dates: '22 Sep', reason: 'Medical appointment', status: 'Pending' },
-  { id: 'l4', name: 'Arjun Nair', role: 'Student', dates: '10 Sep', reason: 'Family travel', status: 'Rejected' },
-  { id: 'l5', name: 'Fathima Beevi', role: 'Teacher', dates: '25–26 Sep', reason: 'Personal', status: 'Approved' },
 ];
 
 type ChatMessage = { id: string; from: 'in' | 'out'; text: string; time: string };
@@ -366,55 +403,785 @@ function DashboardPage() {
   );
 }
 
+function audienceTone(audience: string): BadgeTone {
+  if (audience === 'ALL') return 'blue';
+  if (audience === 'STAFF' || audience === 'ADMIN') return 'slate';
+  if (audience === 'STUDENT') return 'green';
+  return 'amber';
+}
+
+function audienceLabel(audience: string, className?: string | null) {
+  if (audience === 'ALL') return 'All';
+  if (audience === 'ADMIN') return 'Admins';
+  if (audience === 'STAFF') return 'Staff';
+  if (audience === 'STUDENT') return 'Students';
+  if (audience === 'CLASS') return className || 'Class';
+  if (audience === 'CUSTOM') return 'Custom';
+  return audience;
+}
+
+function formatPostDate(value?: string) {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  return date.toLocaleDateString(undefined, {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+  });
+}
+
+type ApiPost = {
+  id: string;
+  title: string;
+  content: string;
+  audience: string;
+  createdAt: string;
+  fileUrl?: string | null;
+  mediaType?: string | null;
+  author?: { firstName?: string; lastName?: string } | null;
+  targetClass?: { id: string; name: string } | null;
+};
+
+type PostFormState = {
+  title: string;
+  content: string;
+  audience: string;
+};
+
+const EMPTY_POST_FORM: PostFormState = {
+  title: '',
+  content: '',
+  audience: 'ALL',
+};
+
+const POST_AUDIENCES = [
+  { value: 'ALL', label: 'All' },
+  { value: 'STAFF', label: 'Staff' },
+  { value: 'STUDENT', label: 'Students' },
+];
+
+function PostFormModal({
+  form,
+  file,
+  busy,
+  error,
+  onChange,
+  onFileChange,
+  onClose,
+  onSubmit,
+}: {
+  form: PostFormState;
+  file: File | null;
+  busy: boolean;
+  error: string;
+  onChange: (next: PostFormState) => void;
+  onFileChange: (next: File | null) => void;
+  onClose: () => void;
+  onSubmit: (event: FormEvent) => void;
+}) {
+  const inputClass =
+    'mt-1.5 h-10 w-full rounded-lg border border-gray-200 px-3 text-sm text-gray-900 placeholder:text-gray-400 focus:border-blue-600 focus:outline-none focus:ring-1 focus:ring-blue-600';
+
+  return (
+    <Modal onClose={onClose} size="md">
+      <div className="mb-3 flex items-start justify-between gap-3 sm:mb-4">
+        <div className="min-w-0">
+          <h2 className="text-base font-semibold text-gray-900 sm:text-lg">New post</h2>
+          <p className="mt-1 hidden text-sm text-gray-500 sm:block">
+            Publish an announcement. Optional photo or video up to 2 MB.
+          </p>
+        </div>
+        <IconButton label="Close" onClick={onClose} className="shrink-0">
+          <X className="h-4 w-4" />
+        </IconButton>
+      </div>
+
+      <form onSubmit={onSubmit} className="space-y-2 sm:space-y-3">
+        <label className="block text-sm text-gray-700">
+          Title
+          <input
+            value={form.title}
+            onChange={(event) => onChange({ ...form, title: event.target.value })}
+            required
+            className={inputClass}
+          />
+        </label>
+        <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2 sm:gap-3">
+          <label className="block text-sm text-gray-700 sm:col-span-2">
+            Content
+            <textarea
+              value={form.content}
+              onChange={(event) => onChange({ ...form, content: event.target.value })}
+              required
+              rows={3}
+              className="mt-1.5 w-full resize-none rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-900 placeholder:text-gray-400 focus:border-blue-600 focus:outline-none focus:ring-1 focus:ring-blue-600"
+            />
+          </label>
+          <label className="block text-sm text-gray-700 sm:col-span-2">
+            Audience
+            <select
+              value={form.audience}
+              onChange={(event) => onChange({ ...form, audience: event.target.value })}
+              className={inputClass}
+            >
+              {POST_AUDIENCES.map((item) => (
+                <option key={item.value} value={item.value}>
+                  {item.label}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+
+        <div className="rounded-lg border border-dashed border-gray-300 p-3">
+          <p className="text-sm font-medium text-gray-800">Photo or video</p>
+          <p className="mt-1 text-xs text-gray-500">Images or videos only · max 2 MB</p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <label className="inline-flex h-10 flex-1 cursor-pointer items-center justify-center gap-2 rounded-lg border border-gray-200 bg-white px-3 text-sm font-medium text-gray-700 hover:bg-gray-50 sm:flex-none">
+              <Image className="h-4 w-4" />
+              Photo
+              <input
+                type="file"
+                accept="image/*"
+                className="hidden"
+                onChange={(event) => onFileChange(event.target.files?.[0] ?? null)}
+              />
+            </label>
+            <label className="inline-flex h-10 flex-1 cursor-pointer items-center justify-center gap-2 rounded-lg border border-gray-200 bg-white px-3 text-sm font-medium text-gray-700 hover:bg-gray-50 sm:flex-none">
+              <Video className="h-4 w-4" />
+              Video
+              <input
+                type="file"
+                accept="video/*"
+                className="hidden"
+                onChange={(event) => onFileChange(event.target.files?.[0] ?? null)}
+              />
+            </label>
+            {file && (
+              <button
+                type="button"
+                onClick={() => onFileChange(null)}
+                className="inline-flex h-10 items-center rounded-lg px-3 text-sm font-medium text-red-600 hover:bg-red-50"
+              >
+                Remove file
+              </button>
+            )}
+          </div>
+          {file && (
+            <p className="mt-2 truncate text-sm text-gray-600">
+              {file.name} · {(file.size / 1024).toFixed(0)} KB
+            </p>
+          )}
+        </div>
+
+        {error && <p className="text-sm text-red-600">{error}</p>}
+
+        <div className="flex flex-col-reverse gap-2 pt-1 sm:flex-row sm:justify-end sm:pt-2">
+          <button
+            type="button"
+            onClick={onClose}
+            className="inline-flex h-11 w-full items-center justify-center rounded-lg border border-gray-200 px-4 text-sm font-medium text-gray-700 hover:bg-gray-50 sm:h-10 sm:w-auto"
+          >
+            Cancel
+          </button>
+          <PrimaryButton type="submit" className="w-full sm:w-auto" icon={<Plus className="h-4 w-4" />}>
+            {busy ? 'Publishing...' : 'Publish post'}
+          </PrimaryButton>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
 function PostsPage() {
+  const [posts, setPosts] = useState<ApiPost[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState('');
+  const [modalOpen, setModalOpen] = useState(false);
+  const [form, setForm] = useState<PostFormState>(EMPTY_POST_FORM);
+  const [file, setFile] = useState<File | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [formError, setFormError] = useState('');
+
+  const load = async () => {
+    setLoadError('');
+    try {
+      const { data } = await api.get('/posts');
+      setPosts(data);
+    } catch {
+      setLoadError('Could not load posts. Check that you are signed in as admin.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    load().catch(console.error);
+  }, []);
+
+  const openModal = () => {
+    setForm(EMPTY_POST_FORM);
+    setFile(null);
+    setFormError('');
+    setModalOpen(true);
+  };
+
+  const closeModal = () => {
+    if (busy) return;
+    setModalOpen(false);
+    setFormError('');
+  };
+
+  const onFileChange = (next: File | null) => {
+    setFormError('');
+    if (!next) {
+      setFile(null);
+      return;
+    }
+    if (!next.type.startsWith('image/') && !next.type.startsWith('video/')) {
+      setFormError('Only photo or video files are allowed.');
+      setFile(null);
+      return;
+    }
+    if (next.size > MAX_MEDIA_BYTES) {
+      setFormError('File must be 2 MB or smaller.');
+      setFile(null);
+      return;
+    }
+    setFile(next);
+  };
+
+  const onSubmit = async (event: FormEvent) => {
+    event.preventDefault();
+    setBusy(true);
+    setFormError('');
+    try {
+      const body = new FormData();
+      body.append('title', form.title.trim());
+      body.append('content', form.content.trim());
+      body.append('audience', form.audience);
+      if (file) body.append('file', file);
+
+      await api.post('/posts', body);
+      setModalOpen(false);
+      setForm(EMPTY_POST_FORM);
+      setFile(null);
+      await load();
+    } catch (err: unknown) {
+      setFormError(apiErrorMessage(err, 'Could not create post'));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const deletePost = async (post: ApiPost) => {
+    const confirmed = window.confirm(`Delete “${post.title}”?`);
+    if (!confirmed) return;
+    try {
+      await api.delete(`/posts/${post.id}`);
+      await load();
+    } catch (err: unknown) {
+      setLoadError(apiErrorMessage(err, 'Could not delete post'));
+    }
+  };
+
   return (
     <>
       <SectionHeader
         title="Posts"
         subtitle="Announcements for staff, classes, and the whole school"
         action={
-          <PrimaryButton icon={<Plus className="h-4 w-4" />}>New post</PrimaryButton>
+          <PrimaryButton icon={<Plus className="h-4 w-4" />} onClick={openModal}>
+            New post
+          </PrimaryButton>
         }
       />
-      <div className="space-y-3">
-        {POSTS.map((post) => (
-          <Card key={post.id} className="p-4 md:p-5">
-            <div className="flex items-start gap-3">
-              <div className="min-w-0 flex-1">
-                <div className="flex flex-wrap items-center gap-2">
-                  <Badge tone={post.tone}>{post.audience}</Badge>
-                  <span className="text-xs text-gray-400">{post.date}</span>
+
+      {loading && <p className="text-sm text-gray-500">Loading posts...</p>}
+      {loadError && <p className="mb-4 text-sm text-red-600">{loadError}</p>}
+
+      {!loading && !loadError && (
+        <div className="space-y-3">
+          {posts.map((post) => {
+            const authorName = `${post.author?.firstName ?? ''} ${post.author?.lastName ?? ''}`.trim();
+            const mediaSrc = mediaUrl(post.fileUrl);
+            return (
+              <Card key={post.id} className="p-4 md:p-5">
+                <div className="flex items-start gap-3">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Badge tone={audienceTone(post.audience)}>
+                        {audienceLabel(post.audience, post.targetClass?.name)}
+                      </Badge>
+                      <span className="text-xs text-gray-400">{formatPostDate(post.createdAt)}</span>
+                    </div>
+                    <h2 className="mt-2 font-semibold text-gray-900">{post.title}</h2>
+                    <p className="mt-1 whitespace-pre-wrap text-sm text-gray-600">{post.content}</p>
+                    <PostMedia src={mediaSrc} mediaType={post.mediaType} />
+                    <p className="mt-2 text-sm text-gray-500">
+                      Posted by {authorName || 'Admin'}
+                    </p>
+                  </div>
+                  <IconButton label={`Delete ${post.title}`} onClick={() => deletePost(post)}>
+                    <Trash2 className="h-4 w-4" />
+                  </IconButton>
                 </div>
-                <h2 className="mt-2 font-semibold text-gray-900">{post.title}</h2>
-                <p className="mt-1 text-sm text-gray-500">Posted by {post.author}</p>
-              </div>
-              <OverflowMenu />
-            </div>
-          </Card>
-        ))}
-      </div>
+              </Card>
+            );
+          })}
+
+          {!posts.length && (
+            <Card className="p-6 text-center">
+              <p className="text-sm text-gray-500">No posts yet. Use New post to publish one.</p>
+            </Card>
+          )}
+        </div>
+      )}
+
+      {modalOpen && (
+        <PostFormModal
+          form={form}
+          file={file}
+          busy={busy}
+          error={formError}
+          onChange={setForm}
+          onFileChange={onFileChange}
+          onClose={closeModal}
+          onSubmit={onSubmit}
+        />
+      )}
     </>
+  );
+}
+
+function UserFormModal({
+  mode,
+  form,
+  classes,
+  users,
+  busy,
+  error,
+  onChange,
+  onClose,
+  onSubmit,
+}: {
+  mode: 'add' | 'edit';
+  form: UserFormState;
+  classes: SchoolClassOption[];
+  users: ApiUser[];
+  busy: boolean;
+  error: string;
+  onChange: (next: UserFormState) => void;
+  onClose: () => void;
+  onSubmit: (event: FormEvent) => void;
+}) {
+  const inputClass =
+    'mt-1.5 h-10 w-full rounded-lg border border-gray-200 px-3 text-sm text-gray-900 placeholder:text-gray-400 focus:border-blue-600 focus:outline-none focus:ring-1 focus:ring-blue-600';
+
+  const setClassAndTeacher = (schoolClassId: string) => {
+    onChange({
+      ...form,
+      schoolClassId,
+      teacherEmail: schoolClassId ? teacherEmailForClass(users, schoolClassId) : form.teacherEmail,
+    });
+  };
+
+  const setTeacherEmailAndClass = (teacherEmail: string) => {
+    const teacher = users.find(
+      (user) =>
+        user.role === 'STAFF' && user.email.toLowerCase() === teacherEmail.toLowerCase().trim(),
+    );
+    onChange({
+      ...form,
+      teacherEmail,
+      schoolClassId: teacher?.staffProfile?.assignedClassId || form.schoolClassId,
+    });
+  };
+
+  return (
+    <Modal onClose={onClose} size="lg">
+      <div className="mb-3 flex items-start justify-between gap-3 sm:mb-4">
+        <div className="min-w-0">
+          <h2 className="text-base font-semibold text-gray-900 sm:text-lg">
+            {mode === 'add' ? 'Add user' : `Edit ${displayRole(form.role).toLowerCase()}`}
+          </h2>
+          <p className="mt-1 hidden text-sm text-gray-500 sm:block">
+            {mode === 'add'
+              ? 'Create an admin, teacher, or student account.'
+              : 'Update account details for this user.'}
+          </p>
+        </div>
+        <IconButton label="Close" onClick={onClose} className="shrink-0">
+          <X className="h-4 w-4" />
+        </IconButton>
+      </div>
+
+      <form onSubmit={onSubmit} className="space-y-2 sm:space-y-3">
+        {mode === 'add' && (
+          <label className="block text-sm text-gray-700">
+            Role
+            <select
+              value={form.role}
+              onChange={(event) =>
+                onChange({ ...form, role: event.target.value as UserFormRole })
+              }
+              className={inputClass}
+            >
+              <option value="ADMIN">Admin</option>
+              <option value="STAFF">Teacher</option>
+              <option value="STUDENT">Student</option>
+            </select>
+          </label>
+        )}
+
+        {form.role === 'STAFF' ? (
+          <label className="block text-sm text-gray-700">
+            Teacher name
+            <input
+              value={form.teacherName}
+              onChange={(event) => onChange({ ...form, teacherName: event.target.value })}
+              required
+              placeholder="Full name"
+              className={inputClass}
+            />
+          </label>
+        ) : (
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 sm:gap-3">
+            <label className="block text-sm text-gray-700">
+              First name
+              <input
+                value={form.firstName}
+                onChange={(event) => onChange({ ...form, firstName: event.target.value })}
+                required
+                className={inputClass}
+              />
+            </label>
+            <label className="block text-sm text-gray-700">
+              Last name
+              <input
+                value={form.lastName}
+                onChange={(event) => onChange({ ...form, lastName: event.target.value })}
+                required
+                className={inputClass}
+              />
+            </label>
+          </div>
+        )}
+
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 sm:gap-3">
+          {(mode === 'add' || form.role === 'ADMIN' || form.role === 'STAFF') && (
+            <label className="block text-sm text-gray-700">
+              Email
+              <input
+                type="email"
+                value={form.email}
+                onChange={(event) => onChange({ ...form, email: event.target.value })}
+                required={mode === 'add' || form.role !== 'STUDENT'}
+                placeholder="user@school.com"
+                className={inputClass}
+              />
+            </label>
+          )}
+
+          {mode === 'add' && (
+            <label className="block text-sm text-gray-700">
+              Password
+              <input
+                type="password"
+                value={form.password}
+                onChange={(event) => onChange({ ...form, password: event.target.value })}
+                required
+                minLength={6}
+                placeholder="At least 6 characters"
+                className={inputClass}
+              />
+            </label>
+          )}
+        </div>
+
+        {form.role === 'STUDENT' && (
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 sm:gap-3">
+            <label className="block text-sm text-gray-700">
+              Enrollment ID
+              <input
+                value={form.studentId}
+                onChange={(event) => onChange({ ...form, studentId: event.target.value })}
+                required
+                placeholder="9A-12"
+                className={inputClass}
+              />
+            </label>
+            <label className="block text-sm text-gray-700">
+              Class name
+              <select
+                value={form.schoolClassId}
+                onChange={(event) => setClassAndTeacher(event.target.value)}
+                required
+                className={inputClass}
+              >
+                <option value="">Select class</option>
+                {classes.map((item) => (
+                  <option key={item.id} value={item.id}>
+                    {item.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="block text-sm text-gray-700">
+              Teacher email
+              <input
+                type="email"
+                value={form.teacherEmail}
+                onChange={(event) => setTeacherEmailAndClass(event.target.value)}
+                placeholder="teacher@school.com"
+                className={inputClass}
+              />
+            </label>
+            <label className="block text-sm text-gray-700">
+              Enrollment date
+              <input
+                type="date"
+                value={form.enrollmentDate}
+                onChange={(event) => onChange({ ...form, enrollmentDate: event.target.value })}
+                required
+                className={inputClass}
+              />
+            </label>
+          </div>
+        )}
+
+        {form.role === 'STAFF' && (
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 sm:gap-3">
+            <label className="block text-sm text-gray-700">
+              Teacher ID
+              <input
+                value={form.employeeId}
+                onChange={(event) => onChange({ ...form, employeeId: event.target.value })}
+                required
+                placeholder="T-104"
+                className={inputClass}
+              />
+            </label>
+            <label className="block text-sm text-gray-700">
+              Class
+              <select
+                value={form.assignedClassId}
+                onChange={(event) => onChange({ ...form, assignedClassId: event.target.value })}
+                className={inputClass}
+              >
+                <option value="">No class assigned</option>
+                {classes.map((item) => (
+                  <option key={item.id} value={item.id}>
+                    {item.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+        )}
+
+        {error && <p className="text-sm text-red-600">{error}</p>}
+
+        <div className="flex flex-col-reverse gap-2 pt-1 sm:flex-row sm:justify-end sm:pt-2">
+          <button
+            type="button"
+            onClick={onClose}
+            className="inline-flex h-11 w-full items-center justify-center rounded-lg border border-gray-200 px-4 text-sm font-medium text-gray-700 hover:bg-gray-50 sm:h-10 sm:w-auto"
+          >
+            Cancel
+          </button>
+          <PrimaryButton
+            type="submit"
+            className="w-full sm:w-auto"
+            icon={mode === 'add' ? <Plus className="h-4 w-4" /> : <Check className="h-4 w-4" />}
+          >
+            {busy ? 'Saving...' : mode === 'add' ? 'Create user' : 'Save changes'}
+          </PrimaryButton>
+        </div>
+      </form>
+    </Modal>
   );
 }
 
 function UsersPage() {
   const [query, setQuery] = useState('');
   const [role, setRole] = useState('All roles');
-  const filtered = USERS.filter((user) => {
-    const matchesQuery =
-      !query ||
-      user.name.toLowerCase().includes(query.toLowerCase()) ||
-      user.email.toLowerCase().includes(query.toLowerCase());
-    const matchesRole = role === 'All roles' || user.role === role;
-    return matchesQuery && matchesRole;
-  });
+  const [users, setUsers] = useState<ApiUser[]>([]);
+  const [classes, setClasses] = useState<SchoolClassOption[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState('');
+  const [modal, setModal] = useState<'add' | 'edit' | null>(null);
+  const [editingUserId, setEditingUserId] = useState<string | null>(null);
+  const [form, setForm] = useState<UserFormState>(EMPTY_USER_FORM);
+  const [busy, setBusy] = useState(false);
+  const [formError, setFormError] = useState('');
+
+  const load = async () => {
+    setLoadError('');
+    try {
+      const [usersRes, classesRes] = await Promise.all([
+        api.get('/users'),
+        api.get('/classes'),
+      ]);
+      setUsers(usersRes.data);
+      setClasses(classesRes.data);
+    } catch {
+      setLoadError('Could not load users. Check that you are signed in as admin.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    load().catch(console.error);
+  }, []);
+
+  const filtered = useMemo(() => {
+    return users.filter((user) => {
+      const name = `${user.firstName} ${user.lastName}`.toLowerCase();
+      const email = user.email.toLowerCase();
+      const q = query.toLowerCase();
+      const matchesQuery = !q || name.includes(q) || email.includes(q);
+      const matchesRole =
+        role === 'All roles' ||
+        (role === 'Admin' && user.role === 'ADMIN') ||
+        (role === 'Teacher' && user.role === 'STAFF') ||
+        (role === 'Student' && user.role === 'STUDENT');
+      return matchesQuery && matchesRole;
+    });
+  }, [users, query, role]);
+
+  const openAdd = () => {
+    setModal('add');
+    setEditingUserId(null);
+    setForm({
+      ...EMPTY_USER_FORM,
+      enrollmentDate: new Date().toISOString().slice(0, 10),
+    });
+    setFormError('');
+  };
+
+  const openEdit = (user: ApiUser) => {
+    setModal('edit');
+    setEditingUserId(user.id);
+    const classId =
+      user.studentProfile?.schoolClassId ||
+      user.studentProfile?.schoolClass?.id ||
+      '';
+    setForm({
+      role: user.role,
+      firstName: user.firstName,
+      lastName: user.lastName,
+      email: user.email,
+      password: '',
+      studentId: user.studentProfile?.studentId ?? '',
+      schoolClassId: classId,
+      teacherEmail: classId ? teacherEmailForClass(users, classId) : '',
+      enrollmentDate: toDateInput(
+        user.studentProfile?.enrollmentDate || user.createdAt || null,
+      ),
+      teacherName: `${user.firstName} ${user.lastName}`.trim(),
+      employeeId: user.staffProfile?.employeeId ?? '',
+      assignedClassId:
+        user.staffProfile?.assignedClassId ||
+        user.staffProfile?.assignedClass?.id ||
+        '',
+    });
+    setFormError('');
+  };
+
+  const closeModal = () => {
+    if (busy) return;
+    setModal(null);
+    setEditingUserId(null);
+    setFormError('');
+  };
+
+  const onSubmit = async (event: FormEvent) => {
+    event.preventDefault();
+    setBusy(true);
+    setFormError('');
+    try {
+      if (modal === 'add') {
+        if (form.role === 'STUDENT') {
+          await api.post('/users/students', {
+            firstName: form.firstName.trim(),
+            lastName: form.lastName.trim(),
+            email: form.email.trim(),
+            password: form.password,
+            studentId: form.studentId.trim(),
+            schoolClassId: form.schoolClassId || undefined,
+            teacherEmail: form.teacherEmail.trim() || undefined,
+            enrollmentDate: form.enrollmentDate || undefined,
+          });
+        } else if (form.role === 'STAFF') {
+          const names = splitTeacherName(form.teacherName);
+          await api.post('/auth/register', {
+            role: 'STAFF',
+            firstName: names.firstName,
+            lastName: names.lastName || names.firstName,
+            email: form.email.trim(),
+            password: form.password,
+            employeeId: form.employeeId.trim(),
+            assignedClassId: form.assignedClassId || undefined,
+          });
+        } else {
+          await api.post('/auth/register', {
+            role: 'ADMIN',
+            firstName: form.firstName.trim(),
+            lastName: form.lastName.trim(),
+            email: form.email.trim(),
+            password: form.password,
+          });
+        }
+      } else if (modal === 'edit' && editingUserId) {
+        if (form.role === 'STUDENT') {
+          await api.patch(`/users/students/${editingUserId}`, {
+            firstName: form.firstName.trim(),
+            lastName: form.lastName.trim(),
+            studentId: form.studentId.trim(),
+            schoolClassId: form.schoolClassId || undefined,
+            teacherEmail: form.teacherEmail.trim() || undefined,
+            enrollmentDate: form.enrollmentDate || undefined,
+          });
+        } else if (form.role === 'STAFF') {
+          const names = splitTeacherName(form.teacherName);
+          await api.patch(`/users/staff/${editingUserId}`, {
+            firstName: names.firstName,
+            lastName: names.lastName || names.firstName,
+            email: form.email.trim(),
+            employeeId: form.employeeId.trim(),
+            assignedClassId: form.assignedClassId || null,
+          });
+        } else {
+          await api.patch(`/users/admins/${editingUserId}`, {
+            firstName: form.firstName.trim(),
+            lastName: form.lastName.trim(),
+            email: form.email.trim(),
+          });
+        }
+      }
+      setModal(null);
+      setEditingUserId(null);
+      await load();
+    } catch (err: unknown) {
+      setFormError(apiErrorMessage(err, 'Could not save user'));
+    } finally {
+      setBusy(false);
+    }
+  };
 
   return (
     <>
       <SectionHeader
         title="Users"
-        subtitle="Staff, students, and parent accounts"
-        action={<PrimaryButton icon={<Plus className="h-4 w-4" />}>Add user</PrimaryButton>}
+        subtitle="Admins, teachers, and students"
+        action={
+          <PrimaryButton icon={<Plus className="h-4 w-4" />} onClick={openAdd}>
+            Add user
+          </PrimaryButton>
+        }
       />
       <div className="mb-4 flex flex-col gap-2 sm:flex-row">
         <div className="relative flex-1">
@@ -435,51 +1202,92 @@ function UsersPage() {
           <option>Admin</option>
           <option>Teacher</option>
           <option>Student</option>
-          <option>Parent</option>
         </select>
       </div>
 
-      <div className="space-y-3 md:hidden">
-        {filtered.map((user) => (
-          <Card key={user.id} className="p-4">
-            <div className="flex items-start justify-between gap-2">
-              <PersonCell name={user.name} sub={user.email} />
-              <OverflowMenu />
-            </div>
-            <div className="mt-3 flex flex-wrap gap-x-4 gap-y-2 text-sm">
-              <p className="text-gray-500">
-                Role: <Badge tone={roleTone(user.role)}>{user.role}</Badge>
-              </p>
-              <p className="text-gray-500">
-                Status:{' '}
-                <Badge tone={user.status === 'Active' ? 'green' : 'red'}>{user.status}</Badge>
-              </p>
-            </div>
-          </Card>
-        ))}
-      </div>
+      {loading && <p className="text-sm text-gray-500">Loading users...</p>}
+      {loadError && <p className="mb-4 text-sm text-red-600">{loadError}</p>}
 
-      <div className="hidden md:block">
-        <TableShell columns={['Name', 'Role', 'Email', 'Status', '']}>
-          {filtered.map((user) => (
-            <tr key={user.id} className="hover:bg-gray-50">
-              <td className="px-4 py-3">
-                <PersonCell name={user.name} />
-              </td>
-              <td className="px-4 py-3">
-                <Badge tone={roleTone(user.role)}>{user.role}</Badge>
-              </td>
-              <td className="px-4 py-3 text-gray-500">{user.email}</td>
-              <td className="px-4 py-3">
-                <Badge tone={user.status === 'Active' ? 'green' : 'red'}>{user.status}</Badge>
-              </td>
-              <td className="px-2 py-3 text-right">
-                <OverflowMenu />
-              </td>
-            </tr>
-          ))}
-        </TableShell>
-      </div>
+      {!loading && !loadError && (
+        <>
+          <div className="space-y-3 md:hidden">
+            {filtered.map((user) => {
+              const name = `${user.firstName} ${user.lastName}`.trim();
+              const status = user.isActive ? 'Active' : 'Inactive';
+              return (
+                <Card key={user.id} className="p-4">
+                  <div className="flex items-start justify-between gap-2">
+                    <PersonCell name={name} sub={user.email} />
+                    <IconButton label={`Edit ${name}`} onClick={() => openEdit(user)}>
+                      <Pencil className="h-4 w-4" />
+                    </IconButton>
+                  </div>
+                  <div className="mt-3 flex flex-wrap gap-x-4 gap-y-2 text-sm">
+                    <p className="text-gray-500">
+                      Role: <Badge tone={roleTone(user.role)}>{displayRole(user.role)}</Badge>
+                    </p>
+                    <p className="text-gray-500">
+                      Status: <Badge tone={user.isActive ? 'green' : 'red'}>{status}</Badge>
+                    </p>
+                  </div>
+                </Card>
+              );
+            })}
+          </div>
+
+          <div className="hidden md:block">
+            <TableShell columns={['Name', 'Role', 'Email', 'Status', '']}>
+              {filtered.map((user) => {
+                const name = `${user.firstName} ${user.lastName}`.trim();
+                const status = user.isActive ? 'Active' : 'Inactive';
+                return (
+                  <tr key={user.id} className="hover:bg-gray-50">
+                    <td className="px-4 py-3">
+                      <PersonCell name={name} />
+                    </td>
+                    <td className="px-4 py-3">
+                      <Badge tone={roleTone(user.role)}>{displayRole(user.role)}</Badge>
+                    </td>
+                    <td className="px-4 py-3 text-gray-500">{user.email}</td>
+                    <td className="px-4 py-3">
+                      <Badge tone={user.isActive ? 'green' : 'red'}>{status}</Badge>
+                    </td>
+                    <td className="px-2 py-3 text-right">
+                      <IconButton label={`Edit ${name}`} onClick={() => openEdit(user)}>
+                        <Pencil className="h-4 w-4" />
+                      </IconButton>
+                    </td>
+                  </tr>
+                );
+              })}
+            </TableShell>
+          </div>
+
+          {!filtered.length && (
+            <Card className="mt-3 p-6 text-center">
+              <p className="text-sm text-gray-500">
+                {users.length
+                  ? 'No users match your search.'
+                  : 'No users yet. Use Add user to create one.'}
+              </p>
+            </Card>
+          )}
+        </>
+      )}
+
+      {modal && (
+        <UserFormModal
+          mode={modal}
+          form={form}
+          classes={classes}
+          users={users}
+          busy={busy}
+          error={formError}
+          onChange={setForm}
+          onClose={closeModal}
+          onSubmit={onSubmit}
+        />
+      )}
     </>
   );
 }
@@ -599,92 +1407,208 @@ function GradesPage() {
   );
 }
 
+function leaveTone(status: string): BadgeTone {
+  if (status === 'Approved' || status === 'APPROVED') return 'green';
+  if (status === 'Rejected' || status === 'REJECTED') return 'red';
+  return 'amber';
+}
+
 function LeavePage() {
-  const [rows, setRows] = useState(INITIAL_LEAVE);
+  const [items, setItems] = useState<ApiLeave[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [reviewBusyId, setReviewBusyId] = useState<string | null>(null);
 
-  const setStatus = (id: string, status: LeaveStatus) => {
-    setRows((current) => current.map((row) => (row.id === id ? { ...row, status } : row)));
+  const load = async () => {
+    setError('');
+    try {
+      const { data } = await api.get('/leave');
+      setItems(data);
+    } catch {
+      setError('Could not load leave requests.');
+    } finally {
+      setLoading(false);
+    }
   };
 
-  const tone = (status: LeaveStatus): BadgeTone => {
-    if (status === 'Approved') return 'green';
-    if (status === 'Rejected') return 'red';
-    return 'amber';
+  useEffect(() => {
+    load().catch(console.error);
+  }, []);
+
+  const teacherLeave = items.filter((item) => item.requester?.role === 'STAFF');
+  const studentLeave = items.filter((item) => item.requester?.role === 'STUDENT');
+
+  const review = async (id: string, status: 'APPROVED' | 'REJECTED') => {
+    setReviewBusyId(id);
+    setError('');
+    try {
+      await api.patch(`/leave/${id}/review`, { status });
+      await load();
+    } catch (err: unknown) {
+      setError(apiErrorMessage(err, 'Could not update leave request'));
+    } finally {
+      setReviewBusyId(null);
+    }
   };
 
-  const actions = (row: (typeof rows)[number]) =>
-    row.status === 'Pending' ? (
-      <div className="flex items-center justify-end">
+  const teacherActions = (row: ApiLeave) =>
+    row.status === 'PENDING' ? (
+      <div className="flex items-center justify-end gap-1">
         <IconButton
-          label={`Approve leave for ${row.name}`}
-          onClick={() => setStatus(row.id, 'Approved')}
+          label={`Approve leave for ${leaveFullName(row)}`}
+          onClick={() => review(row.id, 'APPROVED')}
           className="text-green-600 hover:bg-green-50 hover:text-green-700"
         >
           <Check className="h-4 w-4" />
         </IconButton>
         <IconButton
-          label={`Reject leave for ${row.name}`}
-          onClick={() => setStatus(row.id, 'Rejected')}
+          label={`Reject leave for ${leaveFullName(row)}`}
+          onClick={() => review(row.id, 'REJECTED')}
           className="text-red-600 hover:bg-red-50 hover:text-red-700"
         >
           <X className="h-4 w-4" />
         </IconButton>
       </div>
-    ) : (
-      <div className="flex justify-end">
-        <OverflowMenu />
-      </div>
-    );
+    ) : null;
 
   return (
     <>
-      <SectionHeader title="Leave" subtitle="Staff and student leave requests" />
+      <SectionHeader
+        title="Leave"
+        subtitle="Approve teacher leave and monitor student leave status"
+      />
 
-      <div className="space-y-3 md:hidden">
-        {rows.map((row) => (
-          <Card key={row.id} className="p-4">
-            <div className="flex items-start justify-between gap-2">
-              <PersonCell name={row.name} sub={row.role} />
-              {actions(row)}
-            </div>
-            <dl className="mt-3 space-y-2 text-sm">
-              <div className="flex justify-between gap-3">
-                <dt className="text-gray-400">Dates</dt>
-                <dd className="text-gray-700">{row.dates}</dd>
-              </div>
-              <div className="flex justify-between gap-3">
-                <dt className="text-gray-400">Reason</dt>
-                <dd className="text-right text-gray-700">{row.reason}</dd>
-              </div>
-              <div className="flex items-center justify-between gap-3">
-                <dt className="text-gray-400">Status</dt>
-                <dd>
-                  <Badge tone={tone(row.status)}>{row.status}</Badge>
-                </dd>
-              </div>
-            </dl>
-          </Card>
-        ))}
-      </div>
+      {loading && <p className="text-sm text-gray-500">Loading leave requests...</p>}
+      {error && <p className="mb-4 text-sm text-red-600">{error}</p>}
 
-      <div className="hidden md:block">
-        <TableShell columns={['Name', 'Role', 'Dates', 'Reason', 'Status', '']}>
-          {rows.map((row) => (
-            <tr key={row.id} className="hover:bg-gray-50">
-              <td className="px-4 py-3">
-                <PersonCell name={row.name} />
-              </td>
-              <td className="px-4 py-3 text-gray-500">{row.role}</td>
-              <td className="px-4 py-3 text-gray-500">{row.dates}</td>
-              <td className="px-4 py-3 text-gray-500">{row.reason}</td>
-              <td className="px-4 py-3">
-                <Badge tone={tone(row.status)}>{row.status}</Badge>
-              </td>
-              <td className="px-2 py-3">{actions(row)}</td>
-            </tr>
-          ))}
-        </TableShell>
-      </div>
+      {!loading && (
+        <>
+          <h2 className="mb-3 text-base font-semibold text-gray-900">Teacher leave</h2>
+          <div className="mb-8 space-y-3 md:hidden">
+            {teacherLeave.map((row) => (
+              <Card key={row.id} className="p-4">
+                <div className="flex items-start justify-between gap-2">
+                  <PersonCell name={leaveFullName(row)} sub="Teacher" />
+                  <Badge tone={leaveTone(row.status)}>{leaveStatusLabel(row.status)}</Badge>
+                </div>
+                <dl className="mt-3 space-y-2 text-sm">
+                  <div className="flex justify-between gap-3">
+                    <dt className="text-gray-400">Dates</dt>
+                    <dd className="text-gray-700">{formatLeaveDates(row.startDate, row.endDate)}</dd>
+                  </div>
+                  <div className="flex justify-between gap-3">
+                    <dt className="text-gray-400">Reason</dt>
+                    <dd className="text-right text-gray-700">{row.reason}</dd>
+                  </div>
+                </dl>
+                {row.status === 'PENDING' && (
+                  <div className="mt-3 flex gap-2">
+                    <PrimaryButton className="flex-1" onClick={() => review(row.id, 'APPROVED')}>
+                      {reviewBusyId === row.id ? 'Saving...' : 'Approve'}
+                    </PrimaryButton>
+                    <button
+                      type="button"
+                      onClick={() => review(row.id, 'REJECTED')}
+                      className="inline-flex h-10 flex-1 items-center justify-center rounded-lg border border-red-200 px-4 text-sm font-medium text-red-600 hover:bg-red-50"
+                    >
+                      Reject
+                    </button>
+                  </div>
+                )}
+              </Card>
+            ))}
+            {!teacherLeave.length && (
+              <Card className="p-6 text-center">
+                <p className="text-sm text-gray-500">No teacher leave requests.</p>
+              </Card>
+            )}
+          </div>
+
+          <div className="mb-8 hidden md:block">
+            <TableShell columns={['Teacher', 'Dates', 'Reason', 'Status', '']}>
+              {teacherLeave.map((row) => (
+                <tr key={row.id} className="hover:bg-gray-50">
+                  <td className="px-4 py-3">
+                    <PersonCell name={leaveFullName(row)} />
+                  </td>
+                  <td className="px-4 py-3 text-gray-500">
+                    {formatLeaveDates(row.startDate, row.endDate)}
+                  </td>
+                  <td className="px-4 py-3 text-gray-500">{row.reason}</td>
+                  <td className="px-4 py-3">
+                    <Badge tone={leaveTone(row.status)}>{leaveStatusLabel(row.status)}</Badge>
+                  </td>
+                  <td className="px-2 py-3">{teacherActions(row)}</td>
+                </tr>
+              ))}
+            </TableShell>
+            {!teacherLeave.length && (
+              <Card className="mt-3 p-6 text-center">
+                <p className="text-sm text-gray-500">No teacher leave requests.</p>
+              </Card>
+            )}
+          </div>
+
+          <h2 className="mb-3 text-base font-semibold text-gray-900">Student leave</h2>
+          <p className="mb-3 text-sm text-gray-500">
+            Reviewed by each student’s class teacher. Admin view only.
+          </p>
+          <div className="space-y-3 md:hidden">
+            {studentLeave.map((row) => (
+              <Card key={row.id} className="p-4">
+                <div className="flex items-start justify-between gap-2">
+                  <PersonCell
+                    name={leaveFullName(row)}
+                    sub={`${leaveClassName(row)} · Roll ${leaveRoll(row)}`}
+                  />
+                  <Badge tone={leaveTone(row.status)}>{leaveStatusLabel(row.status)}</Badge>
+                </div>
+                <dl className="mt-3 space-y-2 text-sm">
+                  <div className="flex justify-between gap-3">
+                    <dt className="text-gray-400">Dates</dt>
+                    <dd className="text-gray-700">{formatLeaveDates(row.startDate, row.endDate)}</dd>
+                  </div>
+                  <div className="flex justify-between gap-3">
+                    <dt className="text-gray-400">Reason</dt>
+                    <dd className="text-right text-gray-700">{row.reason}</dd>
+                  </div>
+                </dl>
+              </Card>
+            ))}
+            {!studentLeave.length && (
+              <Card className="p-6 text-center">
+                <p className="text-sm text-gray-500">No student leave requests.</p>
+              </Card>
+            )}
+          </div>
+
+          <div className="hidden md:block">
+            <TableShell columns={['Student', 'Class', 'Roll no.', 'Dates', 'Reason', 'Status']}>
+              {studentLeave.map((row) => (
+                <tr key={row.id} className="hover:bg-gray-50">
+                  <td className="px-4 py-3">
+                    <PersonCell name={leaveFullName(row)} />
+                  </td>
+                  <td className="px-4 py-3 text-gray-500">{leaveClassName(row)}</td>
+                  <td className="px-4 py-3 text-gray-500">{leaveRoll(row)}</td>
+                  <td className="px-4 py-3 text-gray-500">
+                    {formatLeaveDates(row.startDate, row.endDate)}
+                  </td>
+                  <td className="px-4 py-3 text-gray-500">{row.reason}</td>
+                  <td className="px-4 py-3">
+                    <Badge tone={leaveTone(row.status)}>{leaveStatusLabel(row.status)}</Badge>
+                  </td>
+                </tr>
+              ))}
+            </TableShell>
+            {!studentLeave.length && (
+              <Card className="mt-3 p-6 text-center">
+                <p className="text-sm text-gray-500">No student leave requests.</p>
+              </Card>
+            )}
+          </div>
+        </>
+      )}
     </>
   );
 }

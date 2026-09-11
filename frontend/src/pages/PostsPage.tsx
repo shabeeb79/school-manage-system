@@ -1,7 +1,7 @@
 import { FormEvent, useEffect, useState } from 'react';
 import api from '../api/client';
 
-const audiences = ['ALL', 'ADMIN', 'STAFF', 'STUDENT', 'CLASS', 'CUSTOM'];
+const audiences = ['ALL', 'STAFF', 'STUDENT'];
 
 export default function PostsPage() {
   const [posts, setPosts] = useState<any[]>([]);
@@ -96,49 +96,6 @@ export default function PostsPage() {
               ))}
             </select>
           </label>
-          {form.audience === 'CLASS' && (
-            <label>
-              Target class
-              <select
-                value={form.targetClassId}
-                onChange={(e) =>
-                  setForm({ ...form, targetClassId: e.target.value })
-                }
-                required
-              >
-                <option value="">Select class</option>
-                {classes.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-          )}
-          {form.audience === 'CUSTOM' && (
-            <label>
-              Target users
-              <select
-                multiple
-                value={form.targetUserIds}
-                onChange={(e) =>
-                  setForm({
-                    ...form,
-                    targetUserIds: Array.from(
-                      e.target.selectedOptions,
-                      (o) => o.value,
-                    ),
-                  })
-                }
-              >
-                {users.map((u) => (
-                  <option key={u.id} value={u.id}>
-                    {u.firstName} {u.lastName} ({u.role})
-                  </option>
-                ))}
-              </select>
-            </label>
-          )}
           {error && <p className="error">{error}</p>}
           <button className="btn primary" type="submit">
             Publish

@@ -46,6 +46,8 @@ export class UsersController {
       parentPhone?: string;
       address?: string;
       schoolClassId?: string;
+      teacherEmail?: string;
+      enrollmentDate?: string;
     },
   ) {
     return this.users.createStudent(user, body);
@@ -65,16 +67,52 @@ export class UsersController {
     body: {
       firstName?: string;
       lastName?: string;
+      studentId?: string;
       parentName?: string;
       parentPhone?: string;
       address?: string;
       schoolClassId?: string;
+      teacherEmail?: string;
+      enrollmentDate?: string;
     },
   ) {
     if (user.role === UserRole.ADMIN) {
       return this.users.adminUpdateStudent(studentUserId, body);
     }
     return this.users.updateStudent(user.id, studentUserId, body);
+  }
+
+  @Patch('staff/:staffUserId')
+  @Roles(UserRole.ADMIN)
+  updateStaff(
+    @Param('staffUserId') staffUserId: string,
+    @Body()
+    body: {
+      firstName?: string;
+      lastName?: string;
+      email?: string;
+      employeeId?: string;
+      assignedClassId?: string | null;
+      department?: string;
+      subject?: string;
+      phone?: string;
+    },
+  ) {
+    return this.users.updateStaff(staffUserId, body);
+  }
+
+  @Patch('admins/:adminUserId')
+  @Roles(UserRole.ADMIN)
+  updateAdmin(
+    @Param('adminUserId') adminUserId: string,
+    @Body()
+    body: {
+      firstName?: string;
+      lastName?: string;
+      email?: string;
+    },
+  ) {
+    return this.users.updateAdmin(adminUserId, body);
   }
 
   @Patch(':id/active')

@@ -45,6 +45,21 @@ export class AuthService {
       throw new BadRequestException('employeeId is required for staff');
     }
 
+    let schoolClassId = dto.schoolClassId;
+    if (dto.role === UserRole.STUDENT && dto.teacherEmail) {
+      const teacher = await this.prisma.user.findUnique({
+        where: { email: dto.teacherEmail.toLowerCase().trim() },
+        include: { staffProfile: true },
+      });
+      if (!teacher?.staffProfile) {
+        throw new BadRequestException('Teacher email not found');
+      }
+      if (!teacher.staffProfile.assignedClassId) {
+        throw new BadRequestException('Teacher has no assigned class');
+      }
+      schoolClassId = teacher.staffProfile.assignedClassId;
+    }
+
     const hashed = await bcrypt.hash(dto.password, 10);
 
     const user = await this.prisma.user.create({
@@ -58,9 +73,12 @@ export class AuthService {
           studentProfile: {
             create: {
               studentId: dto.studentId!,
-              schoolClassId: dto.schoolClassId,
+              schoolClassId,
               parentName: dto.parentName,
               parentPhone: dto.parentPhone,
+              enrollmentDate: dto.enrollmentDate
+                ? new Date(dto.enrollmentDate)
+                : new Date(),
             },
           },
         }),

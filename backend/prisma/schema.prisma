@@ -99,15 +99,16 @@ model SchoolClass {
 }
 
 model StudentProfile {
-  id           String   @id @default(uuid())
-  studentId    String   @unique
-  dateOfBirth  String?
-  parentName   String?
-  parentPhone  String?
-  address      String?
-  userId       String   @unique
-  schoolClassId String?
-  createdAt    DateTime @default(now())
+  id             String    @id @default(uuid())
+  studentId      String    @unique
+  dateOfBirth    String?
+  parentName     String?
+  parentPhone    String?
+  address        String?
+  enrollmentDate DateTime? @db.Date
+  userId         String    @unique
+  schoolClassId  String?
+  createdAt      DateTime  @default(now())
 
   user        User         @relation(fields: [userId], references: [id], onDelete: Cascade)
   schoolClass SchoolClass? @relation(fields: [schoolClassId], references: [id], onDelete: SetNull)
@@ -138,6 +139,8 @@ model Post {
   audience      PostAudience @default(ALL)
   targetClassId String?
   authorId      String
+  fileUrl       String?
+  mediaType     String?
   isPublished   Boolean      @default(true)
   createdAt     DateTime     @default(now())
   updatedAt     DateTime     @updatedAt

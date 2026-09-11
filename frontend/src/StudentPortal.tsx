@@ -11,14 +11,24 @@ import {
   Megaphone,
   MessageSquare,
   Paperclip,
+  Plus,
   Search,
   Send,
   TrendingUp,
+  X,
 } from 'lucide-react';
 import { useEffect, useState, type FormEvent, type ReactNode } from 'react';
 import { useAuth } from './auth/AuthContext';
 import api from './api/client';
+import {
+  apiErrorMessage,
+  formatLeaveApplied,
+  formatLeaveDates,
+  leaveStatusLabel,
+  type ApiLeave,
+} from './lib/leave';
 import { MAX_ASSIGNMENT_MEDIA_BYTES, mediaUrl } from './lib/media';
+import { IconButton, Modal, PostMedia } from './ui';
 
 type PageId =
   | 'dashboard'
@@ -30,7 +40,6 @@ type PageId =
   | 'messages';
 
 type BadgeTone = 'slate' | 'violet' | 'green' | 'red' | 'amber';
-type LeaveStatus = 'Approved' | 'Pending' | 'Rejected';
 
 const STUDENT = {
   firstName: 'Rahul',
@@ -203,32 +212,6 @@ function SectionHeader({
   );
 }
 
-function IconButton({
-  label,
-  children,
-  onClick,
-  className,
-}: {
-  label: string;
-  children: ReactNode;
-  onClick?: () => void;
-  className?: string;
-}) {
-  return (
-    <button
-      type="button"
-      aria-label={label}
-      onClick={onClick}
-      className={cn(
-        'inline-flex h-10 w-10 items-center justify-center rounded-full text-gray-400 hover:bg-violet-50 hover:text-gray-700',
-        className,
-      )}
-    >
-      {children}
-    </button>
-  );
-}
-
 function PlainStat({ label, value, valueClass }: { label: string; value: string; valueClass?: string }) {
   return (
     <Card className="p-4 md:p-5">
@@ -238,12 +221,35 @@ function PlainStat({ label, value, valueClass }: { label: string; value: string;
   );
 }
 
-const ANNOUNCEMENTS = [
-  { id: 'a1', author: 'Divya Menon', tone: 'violet' as BadgeTone, date: '8 Sep 2026', title: 'Term 2 parent-teacher meeting on 19 September' },
-  { id: 'a2', author: 'Suresh Pillai', tone: 'green' as BadgeTone, date: '6 Sep 2026', title: 'Mathematics unit test — 15 September' },
-  { id: 'a3', author: 'Kavya Menon', tone: 'slate' as BadgeTone, date: '4 Sep 2026', title: 'English essay due next Monday' },
-  { id: 'a4', author: 'Exam cell', tone: 'amber' as BadgeTone, date: '1 Sep 2026', title: 'Unit test window: 15–19 September' },
-];
+type FeedPost = {
+  id: string;
+  title: string;
+  content: string;
+  audience: string;
+  createdAt: string;
+  fileUrl?: string | null;
+  mediaType?: string | null;
+  author?: { firstName?: string; lastName?: string } | null;
+  targetClass?: { name?: string } | null;
+};
+
+function formatAnnouncementDate(value?: string) {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  return date.toLocaleDateString(undefined, {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+  });
+}
+
+function announcementTone(audience: string): BadgeTone {
+  if (audience === 'ALL') return 'violet';
+  if (audience === 'STUDENT') return 'green';
+  if (audience === 'CLASS') return 'amber';
+  return 'slate';
+}
 
 const ATTENDANCE_MONTHS = [
   { month: 'April 2026', present: 20, total: 21, pct: 95 },
@@ -265,13 +271,6 @@ const UPCOMING = [
   { title: 'Climate change essay', subject: 'Social Studies', due: '16 Sep' },
   { title: 'Quadratic equations worksheet', subject: 'Mathematics', due: '14 Sep' },
   { title: 'Lab report — acids & bases', subject: 'Science', due: '20 Sep' },
-];
-
-const LEAVE_ROWS: { id: string; dates: string; reason: string; applied: string; status: LeaveStatus }[] = [
-  { id: 'l1', dates: '12 Sep 2026', reason: 'Fever', applied: '11 Sep 2026', status: 'Approved' },
-  { id: 'l2', dates: '22–23 Sep 2026', reason: 'Family function', applied: '8 Sep 2026', status: 'Pending' },
-  { id: 'l3', dates: '5 May 2026', reason: 'Medical', applied: '4 May 2026', status: 'Approved' },
-  { id: 'l4', dates: '18 Mar 2026', reason: 'Personal', applied: '16 Mar 2026', status: 'Rejected' },
 ];
 
 type ChatMessage = { id: string; from: 'in' | 'out'; text: string; time: string };
@@ -366,9 +365,9 @@ function submissionBadgeText(submission?: {
   return submissionLabel(submission.status);
 }
 
-function leaveTone(status: LeaveStatus): BadgeTone {
-  if (status === 'Approved') return 'green';
-  if (status === 'Rejected') return 'red';
+function leaveTone(status: string): BadgeTone {
+  if (status === 'Approved' || status === 'APPROVED') return 'green';
+  if (status === 'Rejected' || status === 'REJECTED') return 'red';
   return 'amber';
 }
 
@@ -453,20 +452,69 @@ function DashboardPage({
 }
 
 function AnnouncementsPage() {
+  const { user } = useAuth();
+  const [posts, setPosts] = useState<FeedPost[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const className =
+    user?.studentProfile?.schoolClass?.name || STUDENT.className;
+
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      setError('');
+      try {
+        const { data } = await api.get('/posts/feed');
+        if (active) setPosts(data);
+      } catch {
+        if (active) setError('Could not load announcements.');
+      } finally {
+        if (active) setLoading(false);
+      }
+    })().catch(console.error);
+    return () => {
+      active = false;
+    };
+  }, []);
+
   return (
     <>
-      <SectionHeader title="Announcements" subtitle="School notices for Grade 9 - A" />
-      <div className="space-y-3">
-        {ANNOUNCEMENTS.map((item) => (
-          <Card key={item.id} className="p-4 md:p-5">
-            <div className="flex flex-wrap items-center gap-2">
-              <Badge tone={item.tone}>{item.author}</Badge>
-              <span className="text-xs text-gray-400">{item.date}</span>
-            </div>
-            <h2 className="mt-2 font-semibold text-gray-900">{item.title}</h2>
-          </Card>
-        ))}
-      </div>
+      <SectionHeader
+        title="Announcements"
+        subtitle={`School notices for ${className}`}
+      />
+      {loading && <p className="text-sm text-gray-500">Loading announcements...</p>}
+      {error && <p className="mb-4 text-sm text-red-600">{error}</p>}
+      {!loading && !error && (
+        <div className="space-y-3">
+          {posts.map((item) => {
+            const author = `${item.author?.firstName ?? ''} ${item.author?.lastName ?? ''}`.trim();
+            const mediaSrc = mediaUrl(item.fileUrl);
+            return (
+              <Card key={item.id} className="p-4 md:p-5">
+                <div className="flex flex-wrap items-center gap-2">
+                  <Badge tone={announcementTone(item.audience)}>
+                    {author || 'Announcement'}
+                  </Badge>
+                  <span className="text-xs text-gray-400">
+                    {formatAnnouncementDate(item.createdAt)}
+                  </span>
+                </div>
+                <h2 className="mt-2 font-semibold text-gray-900">{item.title}</h2>
+                {item.content && (
+                  <p className="mt-1 whitespace-pre-wrap text-sm text-gray-600">{item.content}</p>
+                )}
+                <PostMedia src={mediaSrc} mediaType={item.mediaType} />
+              </Card>
+            );
+          })}
+          {!posts.length && (
+            <Card className="p-6 text-center">
+              <p className="text-sm text-gray-500">No announcements for you yet.</p>
+            </Card>
+          )}
+        </div>
+      )}
     </>
   );
 }
@@ -870,48 +918,182 @@ function AssignmentsPage() {
 }
 
 function LeavePage() {
+  const [items, setItems] = useState<ApiLeave[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [modalOpen, setModalOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [formError, setFormError] = useState('');
+  const [form, setForm] = useState({ reason: '', startDate: '', endDate: '' });
+
+  const load = async () => {
+    setError('');
+    try {
+      const { data } = await api.get('/leave');
+      setItems(data);
+    } catch {
+      setError('Could not load leave requests.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    load().catch(console.error);
+  }, []);
+
+  const openModal = () => {
+    setForm({ reason: '', startDate: '', endDate: '' });
+    setFormError('');
+    setModalOpen(true);
+  };
+
+  const onSubmit = async (event: FormEvent) => {
+    event.preventDefault();
+    setBusy(true);
+    setFormError('');
+    try {
+      await api.post('/leave', {
+        reason: form.reason.trim(),
+        startDate: form.startDate,
+        endDate: form.endDate,
+      });
+      setModalOpen(false);
+      await load();
+    } catch (err: unknown) {
+      setFormError(apiErrorMessage(err, 'Could not submit leave request'));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <>
       <SectionHeader
         title="Leave"
-        subtitle="Your leave requests"
-        action={<PrimaryButton className="w-full sm:w-auto">Apply for leave</PrimaryButton>}
+        subtitle="Your leave requests are reviewed by your class teacher"
+        action={
+          <PrimaryButton className="w-full sm:w-auto" icon={<Plus className="h-4 w-4" />} onClick={openModal}>
+            Apply for leave
+          </PrimaryButton>
+        }
       />
-      <div className="space-y-3 md:hidden">
-        {LEAVE_ROWS.map((row) => (
-          <Card key={row.id} className="p-4">
-            <div className="flex items-start justify-between gap-2">
-              <p className="font-semibold text-gray-900">{row.dates}</p>
-              <Badge tone={leaveTone(row.status)}>{row.status}</Badge>
-            </div>
-            <dl className="mt-3 space-y-2 text-sm">
-              <div className="flex justify-between gap-3">
-                <dt className="text-gray-400">Reason</dt>
-                <dd className="text-right text-gray-700">{row.reason}</dd>
-              </div>
-              <div className="flex justify-between gap-3">
-                <dt className="text-gray-400">Applied on</dt>
-                <dd className="text-gray-700">{row.applied}</dd>
-              </div>
-            </dl>
-          </Card>
-        ))}
-      </div>
 
-      <div className="hidden md:block">
-        <TableShell columns={['Dates', 'Reason', 'Applied on', 'Status']}>
-          {LEAVE_ROWS.map((row) => (
-            <tr key={row.id} className="hover:bg-violet-50/40">
-              <td className="px-4 py-3 font-medium text-gray-900">{row.dates}</td>
-              <td className="px-4 py-3 text-gray-500">{row.reason}</td>
-              <td className="px-4 py-3 text-gray-500">{row.applied}</td>
-              <td className="px-4 py-3">
-                <Badge tone={leaveTone(row.status)}>{row.status}</Badge>
-              </td>
-            </tr>
-          ))}
-        </TableShell>
-      </div>
+      {loading && <p className="text-sm text-gray-500">Loading leave requests...</p>}
+      {error && <p className="mb-4 text-sm text-red-600">{error}</p>}
+
+      {!loading && !error && (
+        <>
+          <div className="space-y-3 md:hidden">
+            {items.map((row) => (
+              <Card key={row.id} className="p-4">
+                <div className="flex items-start justify-between gap-2">
+                  <p className="font-semibold text-gray-900">
+                    {formatLeaveDates(row.startDate, row.endDate)}
+                  </p>
+                  <Badge tone={leaveTone(row.status)}>{leaveStatusLabel(row.status)}</Badge>
+                </div>
+                <dl className="mt-3 space-y-2 text-sm">
+                  <div className="flex justify-between gap-3">
+                    <dt className="text-gray-400">Reason</dt>
+                    <dd className="text-right text-gray-700">{row.reason}</dd>
+                  </div>
+                  <div className="flex justify-between gap-3">
+                    <dt className="text-gray-400">Applied on</dt>
+                    <dd className="text-gray-700">{formatLeaveApplied(row.createdAt)}</dd>
+                  </div>
+                </dl>
+              </Card>
+            ))}
+          </div>
+
+          <div className="hidden md:block">
+            <TableShell columns={['Dates', 'Reason', 'Applied on', 'Status']}>
+              {items.map((row) => (
+                <tr key={row.id} className="hover:bg-violet-50/40">
+                  <td className="px-4 py-3 font-medium text-gray-900">
+                    {formatLeaveDates(row.startDate, row.endDate)}
+                  </td>
+                  <td className="px-4 py-3 text-gray-500">{row.reason}</td>
+                  <td className="px-4 py-3 text-gray-500">{formatLeaveApplied(row.createdAt)}</td>
+                  <td className="px-4 py-3">
+                    <Badge tone={leaveTone(row.status)}>{leaveStatusLabel(row.status)}</Badge>
+                  </td>
+                </tr>
+              ))}
+            </TableShell>
+          </div>
+
+          {!items.length && (
+            <Card className="mt-3 p-6 text-center">
+              <p className="text-sm text-gray-500">No leave requests yet.</p>
+            </Card>
+          )}
+        </>
+      )}
+
+      {modalOpen && (
+        <Modal onClose={() => !busy && setModalOpen(false)} size="md">
+          <div className="mb-3 flex items-start justify-between gap-3 sm:mb-4">
+            <div>
+              <h2 className="text-base font-semibold text-gray-900 sm:text-lg">Apply for leave</h2>
+              <p className="mt-1 hidden text-sm text-gray-500 sm:block">
+                Your class teacher will approve or reject this request.
+              </p>
+            </div>
+            <IconButton label="Close" onClick={() => !busy && setModalOpen(false)} className="shrink-0">
+              <X className="h-4 w-4" />
+            </IconButton>
+          </div>
+          <form onSubmit={onSubmit} className="space-y-2 sm:space-y-3">
+            <label className="block text-sm text-gray-700">
+              Reason
+              <textarea
+                required
+                rows={3}
+                value={form.reason}
+                onChange={(event) => setForm({ ...form, reason: event.target.value })}
+                className="mt-1.5 w-full resize-none rounded-lg border border-gray-200 px-3 py-2 text-sm focus:border-indigo-600 focus:outline-none focus:ring-1 focus:ring-indigo-600"
+              />
+            </label>
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 sm:gap-3">
+              <label className="block text-sm text-gray-700">
+                Start date
+                <input
+                  required
+                  type="date"
+                  value={form.startDate}
+                  onChange={(event) => setForm({ ...form, startDate: event.target.value })}
+                  className="mt-1.5 h-10 w-full rounded-lg border border-gray-200 px-3 text-sm focus:border-indigo-600 focus:outline-none focus:ring-1 focus:ring-indigo-600"
+                />
+              </label>
+              <label className="block text-sm text-gray-700">
+                End date
+                <input
+                  required
+                  type="date"
+                  value={form.endDate}
+                  onChange={(event) => setForm({ ...form, endDate: event.target.value })}
+                  className="mt-1.5 h-10 w-full rounded-lg border border-gray-200 px-3 text-sm focus:border-indigo-600 focus:outline-none focus:ring-1 focus:ring-indigo-600"
+                />
+              </label>
+            </div>
+            {formError && <p className="text-sm text-red-600">{formError}</p>}
+            <div className="flex flex-col-reverse gap-2 pt-1 sm:flex-row sm:justify-end sm:pt-2">
+              <button
+                type="button"
+                onClick={() => !busy && setModalOpen(false)}
+                className="inline-flex h-11 w-full items-center justify-center rounded-lg border border-gray-200 px-4 text-sm font-medium text-gray-700 hover:bg-gray-50 sm:h-10 sm:w-auto"
+              >
+                Cancel
+              </button>
+              <PrimaryButton type="submit" className="w-full sm:w-auto">
+                {busy ? 'Submitting...' : 'Submit request'}
+              </PrimaryButton>
+            </div>
+          </form>
+        </Modal>
+      )}
     </>
   );
 }

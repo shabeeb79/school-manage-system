@@ -1,5 +1,5 @@
 import { MoreHorizontal, TrendingDown, TrendingUp } from 'lucide-react';
-import type { ReactNode } from 'react';
+import { useEffect, type ReactNode } from 'react';
 
 export type BadgeTone = 'slate' | 'blue' | 'green' | 'red' | 'amber';
 export type AvatarSize = 'sm' | 'md' | 'lg';
@@ -140,17 +140,22 @@ export function PrimaryButton({
   icon,
   onClick,
   type = 'button',
+  className,
 }: {
   children: ReactNode;
   icon?: ReactNode;
   onClick?: () => void;
   type?: 'button' | 'submit';
+  className?: string;
 }) {
   return (
     <button
       type={type}
       onClick={onClick}
-      className="inline-flex h-10 shrink-0 items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 text-sm font-medium text-white hover:bg-blue-700 active:bg-blue-800"
+      className={cn(
+        'inline-flex h-11 shrink-0 items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 text-sm font-medium text-white hover:bg-blue-700 active:bg-blue-800 sm:h-10',
+        className,
+      )}
     >
       {icon}
       {children}
@@ -204,11 +209,100 @@ export function IconButton({
   );
 }
 
+export function Modal({
+  children,
+  onClose,
+  className,
+  size = 'md',
+}: {
+  children: ReactNode;
+  onClose: () => void;
+  className?: string;
+  size?: 'sm' | 'md' | 'lg';
+}) {
+  const widths = {
+    sm: 'sm:max-w-md',
+    md: 'sm:max-w-xl',
+    lg: 'sm:max-w-2xl',
+  };
+
+  useEffect(() => {
+    const previous = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = previous;
+    };
+  }, []);
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center sm:p-6">
+      <button
+        type="button"
+        aria-label="Close dialog"
+        className="absolute inset-0 bg-black/40"
+        onClick={onClose}
+      />
+      <Card
+        className={cn(
+          'relative z-10 flex w-full flex-col',
+          'rounded-t-2xl border-b-0 p-4 pb-[max(1rem,env(safe-area-inset-bottom))] shadow-lg',
+          'sm:rounded-xl sm:border sm:p-6 sm:pb-6',
+          widths[size],
+          className,
+        )}
+      >
+        <div className="mx-auto mb-3 h-1 w-10 shrink-0 rounded-full bg-gray-200 sm:hidden" aria-hidden />
+        {children}
+      </Card>
+    </div>
+  );
+}
+
 export function OverflowMenu() {
   return (
     <IconButton label="More actions">
       <MoreHorizontal className="h-4 w-4" />
     </IconButton>
+  );
+}
+
+export function PostMedia({
+  src,
+  mediaType,
+  className,
+}: {
+  src?: string | null;
+  mediaType?: string | null;
+  className?: string;
+}) {
+  if (!src) return null;
+
+  const isVideo =
+    mediaType === 'VIDEO' || /\.(mp4|webm|mov|ogg)(\?|$)/i.test(src);
+
+  return (
+    <div
+      className={cn(
+        'mt-3 flex justify-center overflow-hidden rounded-lg border border-gray-200 bg-gray-50',
+        className,
+      )}
+    >
+      {isVideo ? (
+        <video
+          src={src}
+          controls
+          playsInline
+          preload="metadata"
+          className="h-auto max-h-56 w-auto max-w-full object-contain sm:max-h-72 md:max-h-80"
+        />
+      ) : (
+        <img
+          src={src}
+          alt=""
+          className="h-auto max-h-56 w-auto max-w-full object-contain sm:max-h-72 md:max-h-80"
+        />
+      )}
+    </div>
   );
 }
 
