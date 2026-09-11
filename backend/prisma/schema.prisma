@@ -1,0 +1,295 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  ADMIN
+  STAFF
+  STUDENT
+}
+
+enum AttendanceStatus {
+  PRESENT
+  ABSENT
+  LATE
+  EXCUSED
+}
+
+enum LeaveStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum FeeStatus {
+  PENDING
+  PARTIAL
+  PAID
+  OVERDUE
+}
+
+enum SubmissionStatus {
+  PENDING
+  SUBMITTED
+  APPROVED
+  REJECTED
+}
+
+enum PostAudience {
+  ALL
+  ADMIN
+  STAFF
+  STUDENT
+  CLASS
+  CUSTOM
+}
+
+model User {
+  id        String   @id @default(uuid())
+  email     String   @unique
+  password  String
+  firstName String
+  lastName  String
+  role      UserRole
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  studentProfile StudentProfile?
+  staffProfile   StaffProfile?
+
+  postsAuthored          Post[]                 @relation("PostAuthor")
+  attendanceAsStudent    Attendance[]           @relation("AttendanceStudent")
+  attendanceMarked       Attendance[]           @relation("AttendanceMarker")
+  gradesAsStudent        Grade[]                @relation("GradeStudent")
+  gradesRecorded         Grade[]                @relation("GradeRecorder")
+  feesAsStudent          Fee[]                  @relation("FeeStudent")
+  feesCreated            Fee[]                  @relation("FeeCreator")
+  assignmentsCreated     Assignment[]           @relation("AssignmentCreator")
+  submissions            AssignmentSubmission[] @relation("SubmissionStudent")
+  leaveRequests          LeaveRequest[]         @relation("LeaveRequester")
+  leaveReviewed          LeaveRequest[]         @relation("LeaveReviewer")
+  messagesSent           Message[]              @relation("MessageSender")
+  messagesReceived       Message[]              @relation("MessageReceiver")
+  postTargets            PostTarget[]
+
+  @@map("users")
+}
+
+model SchoolClass {
+  id           String   @id @default(uuid())
+  name         String
+  gradeLevel   String
+  section      String?
+  academicYear String?
+  createdAt    DateTime @default(now())
+
+  students    StudentProfile[]
+  staff       StaffProfile[]
+  posts       Post[]
+  attendance  Attendance[]
+  assignments Assignment[]
+
+  @@map("classes")
+}
+
+model StudentProfile {
+  id           String   @id @default(uuid())
+  studentId    String   @unique
+  dateOfBirth  String?
+  parentName   String?
+  parentPhone  String?
+  address      String?
+  userId       String   @unique
+  schoolClassId String?
+  createdAt    DateTime @default(now())
+
+  user        User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  schoolClass SchoolClass? @relation(fields: [schoolClassId], references: [id], onDelete: SetNull)
+
+  @@map("student_profiles")
+}
+
+model StaffProfile {
+  id              String   @id @default(uuid())
+  employeeId      String   @unique
+  department      String?
+  subject         String?
+  phone           String?
+  userId          String   @unique
+  assignedClassId String?
+  createdAt       DateTime @default(now())
+
+  user          User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  assignedClass SchoolClass? @relation(fields: [assignedClassId], references: [id], onDelete: SetNull)
+
+  @@map("staff_profiles")
+}
+
+model Post {
+  id            String       @id @default(uuid())
+  title         String
+  content       String
+  audience      PostAudience @default(ALL)
+  targetClassId String?
+  authorId      String
+  isPublished   Boolean      @default(true)
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+
+  author      User         @relation("PostAuthor", fields: [authorId], references: [id], onDelete: Cascade)
+  targetClass SchoolClass? @relation(fields: [targetClassId], references: [id], onDelete: SetNull)
+  targets     PostTarget[]
+
+  @@map("posts")
+}
+
+model PostTarget {
+  id     String @id @default(uuid())
+  postId String
+  userId String
+
+  post Post @relation(fields: [postId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([postId, userId])
+  @@map("post_targets")
+}
+
+model Attendance {
+  id            String           @id @default(uuid())
+  studentId     String
+  schoolClassId String?
+  date          DateTime         @db.Date
+  status        AttendanceStatus
+  remarks       String?
+  markedById    String?
+  createdAt     DateTime         @default(now())
+
+  student     User         @relation("AttendanceStudent", fields: [studentId], references: [id], onDelete: Cascade)
+  schoolClass SchoolClass? @relation(fields: [schoolClassId], references: [id], onDelete: SetNull)
+  markedBy    User?        @relation("AttendanceMarker", fields: [markedById], references: [id], onDelete: SetNull)
+
+  @@unique([studentId, date])
+  @@map("attendance")
+}
+
+model Grade {
+  id           String   @id @default(uuid())
+  studentId    String
+  subject      String
+  examName     String
+  score        Decimal  @db.Decimal(5, 2)
+  maxScore     Decimal  @db.Decimal(5, 2)
+  gradeLetter  String?
+  remarks      String?
+  term         String?
+  recordedById String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  student    User  @relation("GradeStudent", fields: [studentId], references: [id], onDelete: Cascade)
+  recordedBy User? @relation("GradeRecorder", fields: [recordedById], references: [id], onDelete: SetNull)
+
+  @@map("grades")
+}
+
+model Fee {
+  id          String    @id @default(uuid())
+  studentId   String
+  title       String
+  description String?
+  amount      Decimal   @db.Decimal(10, 2)
+  amountPaid  Decimal   @default(0) @db.Decimal(10, 2)
+  status      FeeStatus @default(PENDING)
+  dueDate     DateTime? @db.Date
+  paidAt      DateTime? @db.Date
+  createdById String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  student   User  @relation("FeeStudent", fields: [studentId], references: [id], onDelete: Cascade)
+  createdBy User? @relation("FeeCreator", fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@map("fees")
+}
+
+model Assignment {
+  id            String   @id @default(uuid())
+  title         String
+  description   String
+  subject       String
+  dueDate       DateTime
+  schoolClassId String
+  createdById   String
+  maxScore      Decimal  @default(100) @db.Decimal(5, 2)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  schoolClass SchoolClass            @relation(fields: [schoolClassId], references: [id], onDelete: Cascade)
+  createdBy   User                   @relation("AssignmentCreator", fields: [createdById], references: [id], onDelete: Cascade)
+  submissions AssignmentSubmission[]
+
+  @@map("assignments")
+}
+
+model AssignmentSubmission {
+  id           String           @id @default(uuid())
+  assignmentId String
+  studentId    String
+  content      String
+  fileUrl      String?
+  mediaType    String?
+  score        Decimal?         @db.Decimal(5, 2)
+  feedback     String?
+  status       SubmissionStatus @default(PENDING)
+  attemptCount Int              @default(0)
+  isGraded     Boolean          @default(false)
+  submittedAt  DateTime         @default(now())
+  updatedAt    DateTime         @updatedAt
+
+  assignment Assignment @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
+  student    User       @relation("SubmissionStudent", fields: [studentId], references: [id], onDelete: Cascade)
+
+  @@unique([assignmentId, studentId])
+  @@map("assignment_submissions")
+}
+
+model LeaveRequest {
+  id         String      @id @default(uuid())
+  requesterId String
+  reason     String
+  startDate  DateTime    @db.Date
+  endDate    DateTime    @db.Date
+  status     LeaveStatus @default(PENDING)
+  reviewNote String?
+  reviewedById String?
+  reviewedAt DateTime?
+  createdAt  DateTime    @default(now())
+  updatedAt  DateTime    @updatedAt
+
+  requester  User  @relation("LeaveRequester", fields: [requesterId], references: [id], onDelete: Cascade)
+  reviewedBy User? @relation("LeaveReviewer", fields: [reviewedById], references: [id], onDelete: SetNull)
+
+  @@map("leave_requests")
+}
+
+model Message {
+  id         String   @id @default(uuid())
+  senderId   String
+  receiverId String
+  subject    String
+  body       String
+  isRead     Boolean  @default(false)
+  createdAt  DateTime @default(now())
+
+  sender   User @relation("MessageSender", fields: [senderId], references: [id], onDelete: Cascade)
+  receiver User @relation("MessageReceiver", fields: [receiverId], references: [id], onDelete: Cascade)
+
+  @@map("messages")
+}
