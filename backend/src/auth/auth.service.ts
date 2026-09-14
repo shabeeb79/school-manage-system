@@ -44,21 +44,30 @@ export class AuthService {
     if (dto.role === UserRole.STAFF && !dto.employeeId) {
       throw new BadRequestException('employeeId is required for staff');
     }
-
-    let schoolClassId = dto.schoolClassId;
-    if (dto.role === UserRole.STUDENT && dto.teacherEmail) {
-      const teacher = await this.prisma.user.findUnique({
-        where: { email: dto.teacherEmail.toLowerCase().trim() },
-        include: { staffProfile: true },
-      });
-      if (!teacher?.staffProfile) {
-        throw new BadRequestException('Teacher email not found');
-      }
-      if (!teacher.staffProfile.assignedClassId) {
-        throw new BadRequestException('Teacher has no assigned class');
-      }
-      schoolClassId = teacher.staffProfile.assignedClassId;
+    if (dto.role === UserRole.STAFF && !dto.subject) {
+      throw new BadRequestException('subject is required for staff');
     }
+    if (dto.role === UserRole.STAFF && dto.assignedClassId && dto.subject) {
+      const existingSameSubject = await this.prisma.staffProfile.findFirst({
+        where: {
+          assignedClassId: dto.assignedClassId,
+          subject: dto.subject,
+        },
+        include: {
+          user: { select: { firstName: true, lastName: true } },
+        },
+      });
+      if (existingSameSubject) {
+        const name =
+          `${existingSameSubject.user.firstName} ${existingSameSubject.user.lastName}`.trim() ||
+          'Another teacher';
+        throw new BadRequestException(
+          `This class already has a ${dto.subject} teacher (${name}).`,
+        );
+      }
+    }
+
+    const schoolClassId = dto.schoolClassId;
 
     const hashed = await bcrypt.hash(dto.password, 10);
 

@@ -17,7 +17,7 @@ const requesterSelect = {
   studentProfile: {
     select: {
       studentId: true,
-      schoolClass: { select: { id: true, name: true } },
+      schoolClass: { select: { id: true, name: true, section: true } },
     },
   },
   staffProfile: {

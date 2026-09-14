@@ -35,6 +35,7 @@ import {
   type ApiLeave,
 } from './lib/leave';
 import { mediaUrl } from './lib/media';
+import { teachingSubjectLabel } from './lib/subjects';
 import {
   Avatar,
   Badge,
@@ -88,21 +89,6 @@ const NAV_ITEMS: { id: PageId; label: string; icon: typeof LayoutDashboard }[] =
   { id: 'announcements', label: 'Announcements', icon: Megaphone },
 ];
 
-const CLASS_OPTIONS = ['Grade 9 - A', 'Grade 8 - B', 'Grade 10 - A'];
-
-const STUDENTS = [
-  { id: 's1', name: 'Rahul Varma', roll: '09A-01', className: 'Grade 9 - A', average: 88, status: 'Good standing' },
-  { id: 's2', name: 'Fathima Beevi', roll: '09A-02', className: 'Grade 9 - A', average: 91, status: 'Good standing' },
-  { id: 's3', name: 'Cyril Thomas', roll: '09A-03', className: 'Grade 9 - A', average: 64, status: 'Needs attention' },
-  { id: 's4', name: 'Ananya Iyer', roll: '09A-06', className: 'Grade 9 - A', average: 79, status: 'Good standing' },
-  { id: 's5', name: 'Arjun Nair', roll: '09A-08', className: 'Grade 9 - A', average: 61, status: 'Needs attention' },
-  { id: 's6', name: 'Devika Raj', roll: '08B-04', className: 'Grade 8 - B', average: 86, status: 'Good standing' },
-  { id: 's7', name: 'Farhan Ali', roll: '08B-05', className: 'Grade 8 - B', average: 58, status: 'Needs attention' },
-  { id: 's8', name: 'Sneha Menon', roll: '08B-09', className: 'Grade 8 - B', average: 82, status: 'Good standing' },
-  { id: 's9', name: 'Lakshmi Pillai', roll: '10A-07', className: 'Grade 10 - A', average: 84, status: 'Good standing' },
-  { id: 's10', name: 'Mohammed Irfan', roll: '10A-11', className: 'Grade 10 - A', average: 73, status: 'Good standing' },
-];
-
 const SCHEDULE = [
   { id: 'p1', time: '08:30 – 09:15', subject: 'English', section: 'Grade 9 - A', room: 'Room 14', current: false },
   { id: 'p2', time: '09:20 – 10:05', subject: 'English', section: 'Grade 8 - B', room: 'Room 11', current: false },
@@ -115,15 +101,6 @@ const NEEDS_GRADING = [
   { title: 'Letter to the editor', className: 'Grade 9 - A', done: 28, total: 36 },
   { title: 'Unseen passage worksheet', className: 'Grade 9 - A', done: 12, total: 36 },
   { title: 'Poetry comprehension', className: 'Grade 8 - B', done: 18, total: 34 },
-];
-
-const GRADE_ROWS = [
-  { name: 'Rahul Varma', className: 'Grade 9 - A', assessment: 'Mid-term English', score: '88 / 100' },
-  { name: 'Fathima Beevi', className: 'Grade 9 - A', assessment: 'Mid-term English', score: '94 / 100' },
-  { name: 'Cyril Thomas', className: 'Grade 9 - A', assessment: 'Mid-term English', score: '52 / 100' },
-  { name: 'Devika Raj', className: 'Grade 8 - B', assessment: 'Poetry comprehension', score: '86 / 100' },
-  { name: 'Farhan Ali', className: 'Grade 8 - B', assessment: 'Poetry comprehension', score: '47 / 100' },
-  { name: 'Lakshmi Pillai', className: 'Grade 10 - A', assessment: 'Macbeth scene analysis', score: '81 / 100' },
 ];
 
 type FeedPost = {
@@ -304,17 +281,57 @@ function DashboardPage({
   teacherName: string;
   onViewAssignments: () => void;
 }) {
+  const [attendanceValue, setAttendanceValue] = useState('—');
+  const [attendanceSub, setAttendanceSub] = useState('Loading today...');
+  const [studentCount, setStudentCount] = useState('—');
+
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      try {
+        const today = todayInputValue();
+        const [studentsRes, attendanceRes] = await Promise.all([
+          api.get('/users/my-students'),
+          api.get('/attendance', { params: { date: today } }),
+        ]);
+        if (!active) return;
+        const students = studentsRes.data as unknown[];
+        const records = attendanceRes.data as Array<{ status: string }>;
+        setStudentCount(String(students.length));
+        if (!students.length) {
+          setAttendanceValue('0 / 0');
+          setAttendanceSub('No students in class');
+          return;
+        }
+        setAttendanceValue(`${records.length} / ${students.length}`);
+        setAttendanceSub(
+          records.length === students.length
+            ? 'Today complete'
+            : 'Mark remaining students today',
+        );
+      } catch {
+        if (active) {
+          setAttendanceValue('—');
+          setAttendanceSub('Could not load attendance');
+        }
+      }
+    })().catch(console.error);
+    return () => {
+      active = false;
+    };
+  }, []);
+
   return (
     <>
       <SectionHeader
         title={`Good morning, ${teacherName}`}
-        subtitle={`Friday, 11 September 2026 · ${TEACHER.department}`}
+        subtitle={`${TEACHER.department} · ${formatDayLabel(todayInputValue())}`}
       />
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4 lg:gap-4">
         <StatCard label="Classes today" value="4" subtext="3 remaining after this period" icon={<BookOpen className="h-4 w-4" />} />
-        <StatCard label="Total students" value="112" subtext="Across 3 sections" icon={<Users className="h-4 w-4" />} />
+        <StatCard label="Total students" value={studentCount} subtext="In your assigned class" icon={<Users className="h-4 w-4" />} />
         <StatCard label="Pending grading" value="18" subtext="4 assignments open" icon={<GraduationCap className="h-4 w-4" />} />
-        <StatCard label="Attendance marked" value="2 / 4" subtext="Grade 9 - A in progress" icon={<ClipboardCheck className="h-4 w-4" />} />
+        <StatCard label="Attendance marked" value={attendanceValue} subtext={attendanceSub} icon={<ClipboardCheck className="h-4 w-4" />} />
       </div>
       <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-3">
         <Card className="p-4 md:p-5 lg:col-span-2">
@@ -377,6 +394,7 @@ type ApiStudent = {
   id: string;
   userId: string;
   studentId: string;
+  schoolClassId?: string | null;
   parentName?: string | null;
   parentPhone?: string | null;
   address?: string | null;
@@ -387,7 +405,7 @@ type ApiStudent = {
     lastName: string;
     isActive: boolean;
   };
-  schoolClass?: { id: string; name: string } | null;
+  schoolClass?: { id: string; name: string; section?: string | null } | null;
 };
 
 type StudentFormState = {
@@ -751,145 +769,444 @@ function StudentsPage() {
   );
 }
 
-function AttendancePage() {
-  const [className, setClassName] = useState(CLASS_OPTIONS[0]);
-  const [saved, setSaved] = useState(false);
-  const classStudents = useMemo(
-    () => STUDENTS.filter((student) => student.className === className),
-    [className],
-  );
-  const [marks, setMarks] = useState<Record<string, Mark>>(() =>
-    Object.fromEntries(
-      STUDENTS.map((student) => {
-        if (student.name === 'Cyril Thomas') return [student.id, 'A' as const];
-        if (student.name === 'Ananya Iyer') return [student.id, 'L' as const];
-        return [student.id, 'P' as const];
-      }),
-    ),
-  );
+function statusToMark(status?: string): Mark {
+  if (status === 'ABSENT') return 'A';
+  if (status === 'LATE' || status === 'EXCUSED') return 'L';
+  return 'P';
+}
 
-  const setMark = (id: string, mark: Mark) => {
+function markToStatus(mark: Mark) {
+  if (mark === 'A') return 'ABSENT';
+  if (mark === 'L') return 'LATE';
+  return 'PRESENT';
+}
+
+function todayInputValue() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function formatDayLabel(value: string) {
+  const date = new Date(`${value}T00:00:00`);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleDateString(undefined, {
+    weekday: 'short',
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+  });
+}
+
+function studentUserId(student: ApiStudent) {
+  return student.userId || student.user?.id || '';
+}
+
+function AttendancePage() {
+  const { user } = useAuth();
+  const [date, setDate] = useState(todayInputValue);
+  const [students, setStudents] = useState<ApiStudent[]>([]);
+  const [marks, setMarks] = useState<Record<string, Mark>>({});
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+  const [saved, setSaved] = useState(false);
+  const [savedCount, setSavedCount] = useState(0);
+
+  const classLabel = (() => {
+    const schoolClass = students[0]?.schoolClass;
+    if (!schoolClass?.name) return 'Your class';
+    const section = schoolClass.section?.trim();
+    return section ? `${schoolClass.name} - ${section}` : schoolClass.name;
+  })();
+
+  const load = async () => {
+    setError('');
+    try {
+      const [studentsRes, attendanceRes] = await Promise.all([
+        api.get('/users/my-students'),
+        api.get('/attendance', { params: { date } }),
+      ]);
+      const list = (studentsRes.data as ApiStudent[]).filter((student) =>
+        Boolean(studentUserId(student)),
+      );
+      setStudents(list);
+      const byStudent = new Map(
+        (attendanceRes.data as Array<{ studentId: string; status: string }>).map((row) => [
+          row.studentId,
+          row.status,
+        ]),
+      );
+      const next: Record<string, Mark> = {};
+      for (const student of list) {
+        const id = studentUserId(student);
+        next[id] = statusToMark(byStudent.get(id));
+      }
+      setMarks(next);
+    } catch (err) {
+      setError(apiErrorMessage(err, 'Could not load attendance.'));
+      setStudents([]);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    setLoading(true);
     setSaved(false);
-    setMarks((current) => ({ ...current, [id]: mark }));
+    load().catch(console.error);
+  }, [date]);
+
+  const setMark = (userId: string, mark: Mark) => {
+    setSaved(false);
+    setMarks((current) => ({ ...current, [userId]: mark }));
+  };
+
+  const save = async () => {
+    if (!students.length) return;
+    setSaving(true);
+    setError('');
+    setSaved(false);
+    try {
+      const schoolClassId =
+        user?.staffProfile?.assignedClassId ||
+        students[0]?.schoolClassId ||
+        students[0]?.schoolClass?.id ||
+        undefined;
+      const entries = students
+        .map((student) => {
+          const id = studentUserId(student);
+          if (!id) return null;
+          return {
+            studentId: id,
+            status: markToStatus(marks[id] ?? 'P'),
+          };
+        })
+        .filter(Boolean);
+      if (!entries.length) {
+        setError('No valid students to mark.');
+        return;
+      }
+      await api.post('/attendance', {
+        date,
+        schoolClassId,
+        entries,
+      });
+      setSavedCount(entries.length);
+      setSaved(true);
+      await load();
+    } catch (err) {
+      setError(apiErrorMessage(err, 'Could not save attendance.'));
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
     <>
       <SectionHeader
         title="Attendance"
-        subtitle={`English · ${className} · Friday, 11 September 2026`}
+        subtitle={`${classLabel} · ${formatDayLabel(date)}`}
         action={
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-            <label className="relative">
-              <span className="sr-only">Change class</span>
-              <select
-                value={className}
-                onChange={(event) => {
-                  setClassName(event.target.value);
-                  setSaved(false);
-                }}
-                className="h-10 appearance-none rounded-lg border border-gray-200 bg-white py-2 pl-3 pr-9 text-sm font-medium text-gray-700 hover:bg-gray-50 focus:border-blue-600 focus:outline-none focus:ring-1 focus:ring-blue-600"
-              >
-                {CLASS_OPTIONS.map((item) => (
-                  <option key={item}>{item}</option>
-                ))}
-              </select>
-              <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
+            <label className="block">
+              <span className="sr-only">Date</span>
+              <input
+                type="date"
+                value={date}
+                onChange={(event) => setDate(event.target.value)}
+                className="h-10 rounded-lg border border-gray-200 bg-white px-3 text-sm text-gray-700 focus:border-blue-600 focus:outline-none focus:ring-1 focus:ring-blue-600"
+              />
             </label>
             <PrimaryButton
               icon={<Check className="h-4 w-4" />}
-              onClick={() => setSaved(true)}
+              disabled={saving || loading || !students.length}
+              onClick={() => {
+                void save();
+              }}
             >
-              Save attendance
+              {saving ? 'Saving...' : 'Save attendance'}
             </PrimaryButton>
           </div>
         }
       />
-      {saved && (
-        <p className="mb-4 text-sm font-medium text-green-700">Attendance saved for {className}.</p>
+
+      {loading && <p className="text-sm text-gray-500">Loading attendance...</p>}
+      {error && <p className="mb-4 text-sm text-red-600">{error}</p>}
+      {saved && !error && (
+        <p className="mb-4 text-sm font-medium text-green-700">
+          Attendance saved for {savedCount} student{savedCount === 1 ? '' : 's'} in {classLabel}.
+          Students will see this on their dashboard and Attendance page.
+        </p>
       )}
 
-      <div className="space-y-3 md:hidden">
-        {classStudents.map((student) => (
-          <Card key={student.id} className="p-4">
-            <PersonCell name={student.name} sub={`Roll ${student.roll}`} />
-            <div className="mt-3 flex items-center justify-between gap-2">
-              <Badge tone={markTone(marks[student.id])}>{markLabel(marks[student.id])}</Badge>
-            </div>
-            <div className="mt-3">
-              <AttendanceButtons value={marks[student.id]} onChange={(mark) => setMark(student.id, mark)} fullWidth />
-            </div>
-          </Card>
-        ))}
-      </div>
+      {!loading && !error && (
+        <>
+          <div className="space-y-3 md:hidden">
+            {students.map((student) => {
+              const id = studentUserId(student);
+              const name = studentFullName(student);
+              const mark = marks[id] ?? 'P';
+              return (
+                <Card key={id} className="p-4">
+                  <PersonCell name={name} sub={`Roll ${student.studentId}`} />
+                  <div className="mt-3 flex items-center justify-between gap-2">
+                    <Badge tone={markTone(mark)}>{markLabel(mark)}</Badge>
+                  </div>
+                  <div className="mt-3">
+                    <AttendanceButtons
+                      value={mark}
+                      onChange={(next) => setMark(id, next)}
+                      fullWidth
+                    />
+                  </div>
+                </Card>
+              );
+            })}
+          </div>
 
-      <div className="hidden md:block">
-        <TableShell columns={['Roll no.', 'Student', 'Status', 'Mark']}>
-          {classStudents.map((student) => (
-            <tr key={student.id} className="hover:bg-gray-50">
-              <td className="px-4 py-3 text-gray-500">{student.roll}</td>
-              <td className="px-4 py-3">
-                <PersonCell name={student.name} />
-              </td>
-              <td className="px-4 py-3">
-                <Badge tone={markTone(marks[student.id])}>{markLabel(marks[student.id])}</Badge>
-              </td>
-              <td className="px-4 py-3">
-                <AttendanceButtons value={marks[student.id]} onChange={(mark) => setMark(student.id, mark)} />
-              </td>
-            </tr>
-          ))}
-        </TableShell>
-      </div>
+          <div className="hidden md:block">
+            <TableShell columns={['Roll no.', 'Student', 'Status', 'Mark']}>
+              {students.map((student) => {
+                const id = studentUserId(student);
+                const name = studentFullName(student);
+                const mark = marks[id] ?? 'P';
+                return (
+                  <tr key={id} className="hover:bg-gray-50">
+                    <td className="px-4 py-3 text-gray-500">{student.studentId}</td>
+                    <td className="px-4 py-3">
+                      <PersonCell name={name} />
+                    </td>
+                    <td className="px-4 py-3">
+                      <Badge tone={markTone(mark)}>{markLabel(mark)}</Badge>
+                    </td>
+                    <td className="px-4 py-3">
+                      <AttendanceButtons
+                        value={mark}
+                        onChange={(next) => setMark(id, next)}
+                      />
+                    </td>
+                  </tr>
+                );
+              })}
+            </TableShell>
+          </div>
+
+          {!students.length && (
+            <Card className="mt-3 p-6 text-center">
+              <p className="text-sm text-gray-500">
+                No students in your assigned class yet.
+              </p>
+            </Card>
+          )}
+        </>
+      )}
     </>
   );
 }
 
 function GradesPage() {
+  const { user } = useAuth();
+  const [data, setData] = useState<{
+    subject: string;
+    examName: string;
+    maxScore: number;
+    expectedSubjects: string[];
+    schoolClass: { id: string; name: string; section?: string | null; label: string } | null;
+    students: Array<{
+      userId: string;
+      studentId: string;
+      firstName: string;
+      lastName: string;
+      myMark: { id: string; score: number; maxScore: number; gradeLetter?: string | null } | null;
+      complete: boolean;
+      totalScore: number | null;
+      totalMax: number | null;
+    }>;
+  } | null>(null);
+  const [scores, setScores] = useState<Record<string, string>>({});
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [savingId, setSavingId] = useState<string | null>(null);
+  const [saveError, setSaveError] = useState('');
+
+  const load = async () => {
+    setError('');
+    try {
+      const { data: payload } = await api.get('/grades/my-class');
+      setData(payload);
+      const next: Record<string, string> = {};
+      for (const student of payload.students as Array<{
+        userId: string;
+        myMark: { score: number } | null;
+      }>) {
+        next[student.userId] =
+          student.myMark != null ? String(student.myMark.score) : '';
+      }
+      setScores(next);
+    } catch (err) {
+      setError(
+        apiErrorMessage(
+          err,
+          'Could not load class grades. Assign a class and subject to this teacher.',
+        ),
+      );
+      setData(null);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    load().catch(console.error);
+  }, []);
+
+  const subjectLabel = teachingSubjectLabel(data?.subject ?? user?.staffProfile?.subject);
+  const classLabel = data?.schoolClass?.label ?? 'Your class';
+
+  const saveMark = async (studentUserId: string) => {
+    const raw = scores[studentUserId]?.trim();
+    if (raw === '' || raw == null) {
+      setSaveError('Enter a score before saving.');
+      return;
+    }
+    const score = Number(raw);
+    if (Number.isNaN(score) || score < 0) {
+      setSaveError('Score must be a valid number.');
+      return;
+    }
+    setSavingId(studentUserId);
+    setSaveError('');
+    try {
+      await api.put('/grades/my-mark', {
+        studentId: studentUserId,
+        score,
+        maxScore: data?.maxScore ?? 100,
+      });
+      await load();
+    } catch (err) {
+      setSaveError(apiErrorMessage(err, 'Could not save mark'));
+    } finally {
+      setSavingId(null);
+    }
+  };
+
   return (
     <>
       <SectionHeader
         title="Grades"
-        subtitle="Latest English assessments across your sections"
-        action={<PrimaryButton icon={<Plus className="h-4 w-4" />}>Enter grades</PrimaryButton>}
+        subtitle={`${subjectLabel} marks · ${classLabel}`}
       />
-      <div className="space-y-3 md:hidden">
-        {GRADE_ROWS.map((row) => (
-          <Card key={`${row.name}-${row.assessment}`} className="p-4">
-            <div className="flex items-start justify-between gap-2">
-              <PersonCell name={row.name} sub={row.className} />
-              <OverflowMenu />
-            </div>
-            <dl className="mt-3 space-y-2 text-sm">
-              <div className="flex justify-between gap-3">
-                <dt className="text-gray-400">Assessment</dt>
-                <dd className="text-right text-gray-700">{row.assessment}</dd>
-              </div>
-              <div className="flex justify-between gap-3">
-                <dt className="text-gray-400">Score</dt>
-                <dd className="font-medium text-gray-900">{row.score}</dd>
-              </div>
-            </dl>
-          </Card>
-        ))}
-      </div>
-      <div className="hidden md:block">
-        <TableShell columns={['Student', 'Class', 'Assessment name', 'Score', '']}>
-          {GRADE_ROWS.map((row) => (
-            <tr key={`${row.name}-${row.assessment}`} className="hover:bg-gray-50">
-              <td className="px-4 py-3">
-                <PersonCell name={row.name} />
-              </td>
-              <td className="px-4 py-3 text-gray-500">{row.className}</td>
-              <td className="px-4 py-3 text-gray-500">{row.assessment}</td>
-              <td className="px-4 py-3 font-medium text-gray-900">{row.score}</td>
-              <td className="px-2 py-3 text-right">
-                <OverflowMenu />
-              </td>
-            </tr>
-          ))}
-        </TableShell>
-      </div>
+
+      {loading && <p className="text-sm text-gray-500">Loading students...</p>}
+      {error && <p className="mb-4 text-sm text-red-600">{error}</p>}
+      {saveError && <p className="mb-4 text-sm text-red-600">{saveError}</p>}
+
+      {!loading && !error && data && (
+        <>
+          <p className="mb-4 text-sm text-gray-500">
+            Enter {subjectLabel} scores out of {data.maxScore}. Grade cards and toppers unlock
+            only after all {data.expectedSubjects.length || 10} subjects are marked for every
+            student.
+          </p>
+
+          <div className="space-y-3 md:hidden">
+            {data.students.map((student) => {
+              const name = `${student.firstName} ${student.lastName}`.trim();
+              return (
+                <Card key={student.userId} className="p-4">
+                  <PersonCell name={name} sub={`Roll ${student.studentId}`} />
+                  <label className="mt-3 block text-sm text-gray-700">
+                    {subjectLabel} score
+                    <input
+                      type="number"
+                      min={0}
+                      max={data.maxScore}
+                      step="0.01"
+                      value={scores[student.userId] ?? ''}
+                      onChange={(event) =>
+                        setScores((prev) => ({
+                          ...prev,
+                          [student.userId]: event.target.value,
+                        }))
+                      }
+                      className="mt-1.5 h-10 w-full rounded-lg border border-gray-200 px-3 text-sm text-gray-900 focus:border-blue-600 focus:outline-none focus:ring-1 focus:ring-blue-600"
+                    />
+                  </label>
+                  <div className="mt-3 flex items-center justify-between gap-2">
+                    <p className="text-sm text-gray-500">
+                      {student.complete && student.totalScore != null
+                        ? `Total ${student.totalScore}/${student.totalMax}`
+                        : 'Total pending'}
+                    </p>
+                    <PrimaryButton
+                      disabled={savingId === student.userId}
+                      onClick={() => {
+                        void saveMark(student.userId);
+                      }}
+                    >
+                      {savingId === student.userId ? 'Saving...' : 'Save'}
+                    </PrimaryButton>
+                  </div>
+                </Card>
+              );
+            })}
+          </div>
+
+          <div className="hidden md:block">
+            <TableShell
+              columns={['Student', 'Roll', `${subjectLabel} / ${data.maxScore}`, 'Total', '']}
+            >
+              {data.students.map((student) => {
+                const name = `${student.firstName} ${student.lastName}`.trim();
+                return (
+                  <tr key={student.userId} className="hover:bg-gray-50">
+                    <td className="px-4 py-3">
+                      <PersonCell name={name} />
+                    </td>
+                    <td className="px-4 py-3 text-gray-500">{student.studentId}</td>
+                    <td className="px-4 py-3">
+                      <input
+                        type="number"
+                        min={0}
+                        max={data.maxScore}
+                        step="0.01"
+                        value={scores[student.userId] ?? ''}
+                        onChange={(event) =>
+                          setScores((prev) => ({
+                            ...prev,
+                            [student.userId]: event.target.value,
+                          }))
+                        }
+                        className="h-10 w-28 rounded-lg border border-gray-200 px-3 text-sm text-gray-900 focus:border-blue-600 focus:outline-none focus:ring-1 focus:ring-blue-600"
+                      />
+                    </td>
+                    <td className="px-4 py-3 text-gray-500">
+                      {student.complete && student.totalScore != null
+                        ? `${student.totalScore} / ${student.totalMax}`
+                        : 'Pending'}
+                    </td>
+                    <td className="px-2 py-3 text-right">
+                      <PrimaryButton
+                        disabled={savingId === student.userId}
+                        onClick={() => {
+                          void saveMark(student.userId);
+                        }}
+                      >
+                        {savingId === student.userId ? 'Saving...' : 'Save'}
+                      </PrimaryButton>
+                    </td>
+                  </tr>
+                );
+              })}
+            </TableShell>
+          </div>
+
+          {!data.students.length && (
+            <Card className="mt-3 p-6 text-center">
+              <p className="text-sm text-gray-500">No students in your assigned class yet.</p>
+            </Card>
+          )}
+        </>
+      )}
     </>
   );
 }

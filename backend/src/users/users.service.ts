@@ -4,7 +4,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { UserRole } from '@prisma/client';
+import { TeachingSubject, UserRole } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
 import { PrismaService } from '../prisma/prisma.service';
 
@@ -18,7 +18,6 @@ type StudentWriteInput = {
   parentPhone?: string;
   address?: string;
   schoolClassId?: string;
-  teacherEmail?: string;
   enrollmentDate?: string;
 };
 
@@ -88,21 +87,6 @@ export class UsersService {
     });
   }
 
-  private async resolveClassFromTeacherEmail(teacherEmail?: string) {
-    if (!teacherEmail?.trim()) return undefined;
-    const teacher = await this.prisma.user.findUnique({
-      where: { email: teacherEmail.toLowerCase().trim() },
-      include: { staffProfile: true },
-    });
-    if (!teacher?.staffProfile) {
-      throw new BadRequestException('Teacher email not found');
-    }
-    if (!teacher.staffProfile.assignedClassId) {
-      throw new BadRequestException('Teacher has no assigned class');
-    }
-    return teacher.staffProfile.assignedClassId;
-  }
-
   private parseEnrollmentDate(value?: string) {
     if (!value?.trim()) return undefined;
     const date = new Date(value);
@@ -124,7 +108,6 @@ export class UsersService {
       parentPhone?: string;
       address?: string;
       schoolClassId?: string;
-      teacherEmail?: string;
       enrollmentDate?: string;
     },
   ) {
@@ -136,9 +119,7 @@ export class UsersService {
       throw new BadRequestException('studentId is required');
     }
 
-    let schoolClassId =
-      (await this.resolveClassFromTeacherEmail(data.teacherEmail)) ??
-      data.schoolClassId;
+    let schoolClassId = data.schoolClassId;
 
     if (actor.role === UserRole.STAFF) {
       const staff = await this.prisma.staffProfile.findUnique({
@@ -149,7 +130,7 @@ export class UsersService {
       }
       schoolClassId = staff.assignedClassId;
     } else if (!schoolClassId) {
-      throw new BadRequestException('schoolClassId or teacherEmail is required');
+      throw new BadRequestException('schoolClassId is required');
     }
 
     const exists = await this.prisma.user.findUnique({ where: { email } });
@@ -200,9 +181,7 @@ export class UsersService {
     });
     if (!student) throw new NotFoundException('Student not found');
 
-    const schoolClassId =
-      (await this.resolveClassFromTeacherEmail(data.teacherEmail)) ??
-      data.schoolClassId;
+    const schoolClassId = data.schoolClassId;
 
     const { firstName, lastName, enrollmentDate, studentId, ...rest } = data;
     if (firstName !== undefined || lastName !== undefined) {
@@ -271,7 +250,6 @@ export class UsersService {
     return this.applyStudentUpdate(studentUserId, {
       ...data,
       schoolClassId: undefined,
-      teacherEmail: undefined,
       studentId: undefined,
       enrollmentDate: undefined,
     });
@@ -290,7 +268,7 @@ export class UsersService {
       employeeId?: string;
       assignedClassId?: string | null;
       department?: string;
-      subject?: string;
+      subject?: string | null;
       phone?: string;
     },
   ) {
@@ -320,6 +298,44 @@ export class UsersService {
       }
     }
 
+    if (data.assignedClassId) {
+      const subjectForCheck =
+        data.subject !== undefined
+          ? data.subject
+          : user.staffProfile.subject;
+      if (subjectForCheck) {
+        const existingSameSubject = await this.prisma.staffProfile.findFirst({
+          where: {
+            assignedClassId: data.assignedClassId,
+            subject: subjectForCheck as TeachingSubject,
+            NOT: { userId: staffUserId },
+          },
+          include: {
+            user: { select: { firstName: true, lastName: true } },
+          },
+        });
+        if (existingSameSubject) {
+          const name =
+            `${existingSameSubject.user.firstName} ${existingSameSubject.user.lastName}`.trim() ||
+            'Another teacher';
+          throw new BadRequestException(
+            `This class already has a ${subjectForCheck} teacher (${name}).`,
+          );
+        }
+      }
+    }
+
+    let subjectValue: TeachingSubject | null | undefined = undefined;
+    if (data.subject !== undefined) {
+      if (!data.subject) {
+        subjectValue = null;
+      } else if ((Object.values(TeachingSubject) as string[]).includes(data.subject)) {
+        subjectValue = data.subject as TeachingSubject;
+      } else {
+        throw new BadRequestException('Invalid teaching subject');
+      }
+    }
+
     await this.prisma.user.update({
       where: { id: staffUserId },
       data: {
@@ -342,14 +358,14 @@ export class UsersService {
           ? { employeeId: data.employeeId.trim() }
           : {}),
         ...(data.assignedClassId !== undefined
-          ? { assignedClassId: data.assignedClassId || null }
+          ? data.assignedClassId
+            ? { assignedClass: { connect: { id: data.assignedClassId } } }
+            : { assignedClass: { disconnect: true } }
           : {}),
         ...(data.department !== undefined
           ? { department: data.department?.trim() || null }
           : {}),
-        ...(data.subject !== undefined
-          ? { subject: data.subject?.trim() || null }
-          : {}),
+        ...(subjectValue !== undefined ? { subject: subjectValue } : {}),
         ...(data.phone !== undefined
           ? { phone: data.phone?.trim() || null }
           : {}),
@@ -432,5 +448,14 @@ export class UsersService {
         isActive: true,
       },
     });
+  }
+
+  async remove(id: string, actorId: string) {
+    if (id === actorId) {
+      throw new BadRequestException('You cannot delete your own account');
+    }
+    await this.findOne(id);
+    await this.prisma.user.delete({ where: { id } });
+    return { ok: true };
   }
 }

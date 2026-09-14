@@ -26,6 +26,19 @@ enum LeaveStatus {
   REJECTED
 }
 
+enum TeachingSubject {
+  ARABIC
+  ENGLISH
+  MALAYALAM
+  MATHEMATICS
+  SOCIAL_SCIENCE
+  HINDI
+  CHEMISTRY
+  BIOLOGY
+  PHYSICS
+  IT
+}
+
 enum FeeStatus {
   PENDING
   PARTIAL
@@ -84,8 +97,7 @@ model User {
 model SchoolClass {
   id           String   @id @default(uuid())
   name         String
-  gradeLevel   String
-  section      String?
+  section      String
   academicYear String?
   createdAt    DateTime @default(now())
 
@@ -117,14 +129,14 @@ model StudentProfile {
 }
 
 model StaffProfile {
-  id              String   @id @default(uuid())
-  employeeId      String   @unique
+  id              String           @id @default(uuid())
+  employeeId      String           @unique
   department      String?
-  subject         String?
+  subject         TeachingSubject?
   phone           String?
-  userId          String   @unique
+  userId          String           @unique
   assignedClassId String?
-  createdAt       DateTime @default(now())
+  createdAt       DateTime         @default(now())
 
   user          User         @relation(fields: [userId], references: [id], onDelete: Cascade)
   assignedClass SchoolClass? @relation(fields: [assignedClassId], references: [id], onDelete: SetNull)

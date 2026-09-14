@@ -5,12 +5,14 @@ import {
   Get,
   Param,
   Post,
+  Put,
   Query,
   UseGuards,
 } from '@nestjs/common';
 import { UserRole } from '@prisma/client';
 import { GradesService } from './grades.service';
 import { CreateGradeDto } from './dto/create-grade.dto';
+import { UpsertStaffMarkDto } from './dto/upsert-staff-mark.dto';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { RolesGuard } from '../auth/roles.guard';
 import { Roles } from '../auth/roles.decorator';
@@ -27,12 +29,33 @@ export class GradesController {
     return this.grades.create(user.id, dto);
   }
 
+  @Put('my-mark')
+  @Roles(UserRole.STAFF)
+  upsertMyMark(
+    @CurrentUser() user: { id: string },
+    @Body() dto: UpsertStaffMarkDto,
+  ) {
+    return this.grades.upsertStaffMark(user.id, dto);
+  }
+
   @Get()
   list(
     @CurrentUser() user: { id: string; role: UserRole },
     @Query('studentId') studentId?: string,
   ) {
     return this.grades.list(user, studentId);
+  }
+
+  @Get('my-class')
+  @Roles(UserRole.STAFF)
+  myClass(@CurrentUser() user: { id: string }) {
+    return this.grades.staffClassMarks(user.id);
+  }
+
+  @Get('toppers')
+  @Roles(UserRole.ADMIN)
+  toppers() {
+    return this.grades.toppers();
   }
 
   @Get('card/:studentId')

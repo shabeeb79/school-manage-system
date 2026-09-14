@@ -1,11 +1,15 @@
 import { FormEvent, useEffect, useState } from 'react';
 import api from '../api/client';
 
+function formatClassLabel(name: string, section?: string | null) {
+  const sec = section?.trim();
+  return sec ? `${name} - ${sec}` : name;
+}
+
 export default function ClassesPage() {
   const [classes, setClasses] = useState<any[]>([]);
   const [form, setForm] = useState({
     name: '',
-    gradeLevel: '',
     section: '',
     academicYear: '2025-26',
   });
@@ -19,7 +23,7 @@ export default function ClassesPage() {
   const onSubmit = async (e: FormEvent) => {
     e.preventDefault();
     await api.post('/classes', form);
-    setForm({ name: '', gradeLevel: '', section: '', academicYear: '2025-26' });
+    setForm({ name: '', section: '', academicYear: '2025-26' });
     await load();
   };
 
@@ -32,19 +36,12 @@ export default function ClassesPage() {
         <form className="panel stack" onSubmit={onSubmit}>
           <h2>Add class</h2>
           <label>
-            Name
+            Class
             <input
               value={form.name}
               onChange={(e) => setForm({ ...form, name: e.target.value })}
               required
-            />
-          </label>
-          <label>
-            Grade level
-            <input
-              value={form.gradeLevel}
-              onChange={(e) => setForm({ ...form, gradeLevel: e.target.value })}
-              required
+              placeholder="10"
             />
           </label>
           <label>
@@ -52,6 +49,8 @@ export default function ClassesPage() {
             <input
               value={form.section}
               onChange={(e) => setForm({ ...form, section: e.target.value })}
+              required
+              placeholder="A"
             />
           </label>
           <label>
@@ -71,8 +70,7 @@ export default function ClassesPage() {
           <table>
             <thead>
               <tr>
-                <th>Name</th>
-                <th>Grade</th>
+                <th>Class</th>
                 <th>Students</th>
                 <th>Staff</th>
               </tr>
@@ -80,11 +78,7 @@ export default function ClassesPage() {
             <tbody>
               {classes.map((c) => (
                 <tr key={c.id}>
-                  <td>{c.name}</td>
-                  <td>
-                    {c.gradeLevel}
-                    {c.section ? `-${c.section}` : ''}
-                  </td>
+                  <td>{formatClassLabel(c.name, c.section)}</td>
                   <td>{c._count?.students ?? 0}</td>
                   <td>{c._count?.staff ?? 0}</td>
                 </tr>

@@ -19,8 +19,6 @@ import {
   Search,
   Send,
   Trash2,
-  TrendingDown,
-  TrendingUp,
   Users,
   Video,
   X,
@@ -37,11 +35,17 @@ import {
   leaveStatusLabel,
   type ApiLeave,
 } from './lib/leave';
+import {
+  TEACHING_SUBJECTS,
+  TEACHING_SUBJECT_LABELS,
+  type TeachingSubject,
+} from './lib/subjects';
 import { MAX_MEDIA_BYTES, mediaUrl } from './lib/media';
 import {
   Avatar,
   Badge,
   Card,
+  ConfirmModal,
   IconButton,
   Modal,
   OverflowMenu,
@@ -101,7 +105,12 @@ function displayRole(role: string) {
   return role;
 }
 
-type SchoolClassOption = { id: string; name: string };
+type SchoolClassOption = { id: string; name: string; section?: string | null };
+
+function formatClassLabel(name: string, section?: string | null) {
+  const sec = section?.trim();
+  return sec ? `${name} - ${sec}` : name;
+}
 
 type ApiUser = {
   id: string;
@@ -115,12 +124,13 @@ type ApiUser = {
     studentId: string;
     enrollmentDate?: string | null;
     schoolClassId?: string | null;
-    schoolClass?: { id: string; name: string } | null;
+    schoolClass?: { id: string; name: string; section?: string | null } | null;
   } | null;
   staffProfile?: {
     employeeId: string;
+    subject?: string | null;
     assignedClassId?: string | null;
-    assignedClass?: { id: string; name: string } | null;
+    assignedClass?: { id: string; name: string; section?: string | null } | null;
   } | null;
 };
 
@@ -134,10 +144,10 @@ type UserFormState = {
   password: string;
   studentId: string;
   schoolClassId: string;
-  teacherEmail: string;
   enrollmentDate: string;
   teacherName: string;
   employeeId: string;
+  subject: string;
   assignedClassId: string;
 };
 
@@ -149,10 +159,10 @@ const EMPTY_USER_FORM: UserFormState = {
   password: '',
   studentId: '',
   schoolClassId: '',
-  teacherEmail: '',
   enrollmentDate: '',
   teacherName: '',
   employeeId: '',
+  subject: '',
   assignedClassId: '',
 };
 
@@ -170,57 +180,12 @@ function splitTeacherName(fullName: string) {
   return { firstName: parts[0], lastName: parts.slice(1).join(' ') };
 }
 
-function teacherEmailForClass(users: ApiUser[], classId: string) {
-  const teacher = users.find(
-    (user) => user.role === 'STAFF' && user.staffProfile?.assignedClassId === classId,
-  );
-  return teacher?.email ?? '';
-}
-
-const WEEKLY_ATTENDANCE = [
-  { day: 'Mon', value: 96 },
-  { day: 'Tue', value: 94 },
-  { day: 'Wed', value: 97 },
-  { day: 'Thu', value: 93 },
-  { day: 'Fri', value: 95 },
-  { day: 'Sat', value: 48 },
-  { day: 'Sun', value: 12 },
-];
-
 const ACTIVITY = [
   { name: 'Kavya Menon', action: 'marked attendance for Grade 8 - A', time: '12 min ago' },
   { name: 'Suresh Pillai', action: 'published “Science practical schedule”', time: '1 hr ago' },
   { name: 'Fathima Beevi', action: 'entered English grades for Grade 10 - A', time: '2 hr ago' },
   { name: 'Rahul Varma', action: 'submitted Climate change essay', time: '3 hr ago' },
   { name: 'Divya Menon', action: 'approved leave for Arjun Nair', time: '5 hr ago' },
-];
-
-const CLASSES = [
-  { id: 'c1', name: 'Grade 8 - A', room: 'Room 12', teacher: 'Kavya Menon', students: 38 },
-  { id: 'c2', name: 'Grade 9 - B', room: 'Room 21', teacher: 'Suresh Pillai', students: 36 },
-  { id: 'c3', name: 'Grade 10 - A', room: 'Room 05', teacher: 'Fathima Beevi', students: 40 },
-  { id: 'c4', name: 'Grade 7 - C', room: 'Room 18', teacher: 'Priya Nambiar', students: 34 },
-  { id: 'c5', name: 'Grade 6 - B', room: 'Room 09', teacher: 'Vikram Rao', students: 32 },
-  { id: 'c6', name: 'Grade 11 - Science', room: 'Lab 2', teacher: 'Meera Krishnan', students: 28 },
-];
-
-const ATTENDANCE_ROWS = [
-  { roll: '01', name: 'Rahul Varma', status: 'Present' },
-  { roll: '02', name: 'Ananya Iyer', status: 'Present' },
-  { roll: '03', name: 'Arjun Nair', status: 'Absent' },
-  { roll: '04', name: 'Aditi Nair', status: 'Late' },
-  { roll: '05', name: 'Mohammed Irfan', status: 'Present' },
-  { roll: '06', name: 'Lakshmi Pillai', status: 'Present' },
-  { roll: '07', name: 'Nikhil Varma', status: 'Absent' },
-  { roll: '08', name: 'Sneha Menon', status: 'Present' },
-];
-
-const GRADE_ROWS = [
-  { subject: 'Mathematics', section: 'Grade 8 - A', average: 86, trend: 'up' as const, top: 'Ananya Iyer' },
-  { subject: 'English', section: 'Grade 10 - A', average: 81, trend: 'down' as const, top: 'Lakshmi Pillai' },
-  { subject: 'Science', section: 'Grade 9 - B', average: 78, trend: 'up' as const, top: 'Rahul Varma' },
-  { subject: 'Social Studies', section: 'Grade 7 - C', average: 84, trend: 'up' as const, top: 'Sneha Menon' },
-  { subject: 'Mathematics', section: 'Grade 11 - Science', average: 72, trend: 'down' as const, top: 'Mohammed Irfan' },
 ];
 
 type ChatMessage = { id: string; from: 'in' | 'out'; text: string; time: string };
@@ -326,6 +291,63 @@ const INITIAL_THREADS: Thread[] = [
 ];
 
 function DashboardPage() {
+  const [todayPct, setTodayPct] = useState('—');
+  const [todaySub, setTodaySub] = useState('Loading...');
+  const [weekly, setWeekly] = useState<Array<{ day: string; value: number }>>([]);
+
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      try {
+        const today = todayInputValue();
+        const [todayRes, usersRes] = await Promise.all([
+          api.get('/attendance', { params: { date: today } }),
+          api.get('/users', { params: { role: 'STUDENT' } }),
+        ]);
+        if (!active) return;
+        const records = todayRes.data as Array<{ status: string }>;
+        const studentCount = (usersRes.data as unknown[]).length;
+        const present = records.filter((r) => r.status === 'PRESENT').length;
+        const marked = records.length;
+        if (!marked) {
+          setTodayPct('—');
+          setTodaySub('No attendance marked today');
+        } else {
+          const pct = Math.round((present / marked) * 1000) / 10;
+          setTodayPct(`${pct}%`);
+          setTodaySub(`${present} of ${marked} marked present${studentCount ? ` · ${studentCount} students` : ''}`);
+        }
+
+        const days: Array<{ day: string; value: number }> = [];
+        for (let i = 6; i >= 0; i -= 1) {
+          const d = new Date();
+          d.setHours(0, 0, 0, 0);
+          d.setDate(d.getDate() - i);
+          const key = d.toISOString().slice(0, 10);
+          const label = d.toLocaleDateString(undefined, { weekday: 'short' });
+          const { data } = await api.get('/attendance', { params: { date: key } });
+          if (!active) return;
+          const dayRecords = data as Array<{ status: string }>;
+          const dayPresent = dayRecords.filter((r) => r.status === 'PRESENT').length;
+          const value = dayRecords.length
+            ? Math.round((dayPresent / dayRecords.length) * 100)
+            : 0;
+          days.push({ day: label, value });
+        }
+        setWeekly(days);
+      } catch {
+        if (active) {
+          setTodayPct('—');
+          setTodaySub('Could not load attendance');
+          setWeekly([]);
+        }
+      }
+    })().catch(console.error);
+    return () => {
+      active = false;
+    };
+  }, []);
+
   return (
     <>
       <SectionHeader
@@ -349,9 +371,8 @@ function DashboardPage() {
         />
         <StatCard
           label="Attendance today"
-          value="94.6%"
-          trend={{ direction: 'down', percent: '0.8%' }}
-          subtext="1,180 of 1,248 present"
+          value={todayPct}
+          subtext={todaySub}
           icon={<ClipboardCheck className="h-4 w-4" />}
         />
         <StatCard
@@ -367,12 +388,12 @@ function DashboardPage() {
           <h2 className="font-semibold text-gray-900">Weekly attendance</h2>
           <p className="mt-1 text-sm text-gray-400">Campus-wide, last 7 days</p>
           <div className="mt-5 flex h-36 items-end gap-2 md:h-44 md:gap-4">
-            {WEEKLY_ATTENDANCE.map((item) => (
-              <div key={item.day} className="flex h-full min-w-0 flex-1 flex-col items-center gap-2">
+            {(weekly.length ? weekly : [{ day: '—', value: 0 }]).map((item, index) => (
+              <div key={`${item.day}-${index}`} className="flex h-full min-w-0 flex-1 flex-col items-center gap-2">
                 <div className="flex w-full flex-1 items-end">
                   <div
                     className="w-full rounded-t-md bg-blue-600 transition-colors hover:bg-blue-700"
-                    style={{ height: `${item.value}%` }}
+                    style={{ height: `${Math.max(item.value, item.value === 0 ? 2 : 0)}%` }}
                     title={`${item.day}: ${item.value}%`}
                   />
                 </div>
@@ -440,7 +461,7 @@ type ApiPost = {
   fileUrl?: string | null;
   mediaType?: string | null;
   author?: { firstName?: string; lastName?: string } | null;
-  targetClass?: { id: string; name: string } | null;
+  targetClass?: { id: string; name: string; section?: string | null } | null;
 };
 
 type PostFormState = {
@@ -603,6 +624,8 @@ function PostsPage() {
   const [file, setFile] = useState<File | null>(null);
   const [busy, setBusy] = useState(false);
   const [formError, setFormError] = useState('');
+  const [pendingDelete, setPendingDelete] = useState<ApiPost | null>(null);
+  const [deleting, setDeleting] = useState(false);
 
   const load = async () => {
     setLoadError('');
@@ -675,14 +698,27 @@ function PostsPage() {
     }
   };
 
-  const deletePost = async (post: ApiPost) => {
-    const confirmed = window.confirm(`Delete “${post.title}”?`);
-    if (!confirmed) return;
+  const askDeletePost = (post: ApiPost) => {
+    setPendingDelete(post);
+  };
+
+  const closeDeletePost = () => {
+    if (deleting) return;
+    setPendingDelete(null);
+  };
+
+  const confirmDeletePost = async () => {
+    if (!pendingDelete) return;
+    setDeleting(true);
     try {
-      await api.delete(`/posts/${post.id}`);
+      await api.delete(`/posts/${pendingDelete.id}`);
+      setPendingDelete(null);
       await load();
     } catch (err: unknown) {
       setLoadError(apiErrorMessage(err, 'Could not delete post'));
+      setPendingDelete(null);
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -712,7 +748,12 @@ function PostsPage() {
                   <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-2">
                       <Badge tone={audienceTone(post.audience)}>
-                        {audienceLabel(post.audience, post.targetClass?.name)}
+                        {audienceLabel(
+                          post.audience,
+                          post.targetClass
+                            ? formatClassLabel(post.targetClass.name, post.targetClass.section)
+                            : null,
+                        )}
                       </Badge>
                       <span className="text-xs text-gray-400">{formatPostDate(post.createdAt)}</span>
                     </div>
@@ -723,7 +764,7 @@ function PostsPage() {
                       Posted by {authorName || 'Admin'}
                     </p>
                   </div>
-                  <IconButton label={`Delete ${post.title}`} onClick={() => deletePost(post)}>
+                  <IconButton label={`Delete ${post.title}`} onClick={() => askDeletePost(post)}>
                     <Trash2 className="h-4 w-4" />
                   </IconButton>
                 </div>
@@ -751,6 +792,23 @@ function PostsPage() {
           onSubmit={onSubmit}
         />
       )}
+
+      {pendingDelete && (
+        <ConfirmModal
+          title="Delete post?"
+          description={
+            <>
+              “{pendingDelete.title}” will be permanently removed. This cannot be undone.
+            </>
+          }
+          confirmLabel="Delete post"
+          busy={deleting}
+          onConfirm={() => {
+            void confirmDeletePost();
+          }}
+          onClose={closeDeletePost}
+        />
+      )}
     </>
   );
 }
@@ -759,7 +817,6 @@ function UserFormModal({
   mode,
   form,
   classes,
-  users,
   busy,
   error,
   onChange,
@@ -769,7 +826,6 @@ function UserFormModal({
   mode: 'add' | 'edit';
   form: UserFormState;
   classes: SchoolClassOption[];
-  users: ApiUser[];
   busy: boolean;
   error: string;
   onChange: (next: UserFormState) => void;
@@ -778,26 +834,6 @@ function UserFormModal({
 }) {
   const inputClass =
     'mt-1.5 h-10 w-full rounded-lg border border-gray-200 px-3 text-sm text-gray-900 placeholder:text-gray-400 focus:border-blue-600 focus:outline-none focus:ring-1 focus:ring-blue-600';
-
-  const setClassAndTeacher = (schoolClassId: string) => {
-    onChange({
-      ...form,
-      schoolClassId,
-      teacherEmail: schoolClassId ? teacherEmailForClass(users, schoolClassId) : form.teacherEmail,
-    });
-  };
-
-  const setTeacherEmailAndClass = (teacherEmail: string) => {
-    const teacher = users.find(
-      (user) =>
-        user.role === 'STAFF' && user.email.toLowerCase() === teacherEmail.toLowerCase().trim(),
-    );
-    onChange({
-      ...form,
-      teacherEmail,
-      schoolClassId: teacher?.staffProfile?.assignedClassId || form.schoolClassId,
-    });
-  };
 
   return (
     <Modal onClose={onClose} size="lg">
@@ -913,30 +949,22 @@ function UserFormModal({
               />
             </label>
             <label className="block text-sm text-gray-700">
-              Class name
+              Class
               <select
                 value={form.schoolClassId}
-                onChange={(event) => setClassAndTeacher(event.target.value)}
+                onChange={(event) =>
+                  onChange({ ...form, schoolClassId: event.target.value })
+                }
                 required
                 className={inputClass}
               >
                 <option value="">Select class</option>
                 {classes.map((item) => (
                   <option key={item.id} value={item.id}>
-                    {item.name}
+                    {formatClassLabel(item.name, item.section)}
                   </option>
                 ))}
               </select>
-            </label>
-            <label className="block text-sm text-gray-700">
-              Teacher email
-              <input
-                type="email"
-                value={form.teacherEmail}
-                onChange={(event) => setTeacherEmailAndClass(event.target.value)}
-                placeholder="teacher@school.com"
-                className={inputClass}
-              />
             </label>
             <label className="block text-sm text-gray-700">
               Enrollment date
@@ -964,6 +992,22 @@ function UserFormModal({
               />
             </label>
             <label className="block text-sm text-gray-700">
+              Subject
+              <select
+                value={form.subject}
+                onChange={(event) => onChange({ ...form, subject: event.target.value })}
+                required
+                className={inputClass}
+              >
+                <option value="">Select subject</option>
+                {TEACHING_SUBJECTS.map((subject) => (
+                  <option key={subject} value={subject}>
+                    {TEACHING_SUBJECT_LABELS[subject]}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="block text-sm text-gray-700 sm:col-span-2">
               Class
               <select
                 value={form.assignedClassId}
@@ -973,7 +1017,7 @@ function UserFormModal({
                 <option value="">No class assigned</option>
                 {classes.map((item) => (
                   <option key={item.id} value={item.id}>
-                    {item.name}
+                    {formatClassLabel(item.name, item.section)}
                   </option>
                 ))}
               </select>
@@ -1005,6 +1049,7 @@ function UserFormModal({
 }
 
 function UsersPage() {
+  const { user: currentUser } = useAuth();
   const [query, setQuery] = useState('');
   const [role, setRole] = useState('All roles');
   const [users, setUsers] = useState<ApiUser[]>([]);
@@ -1016,6 +1061,8 @@ function UsersPage() {
   const [form, setForm] = useState<UserFormState>(EMPTY_USER_FORM);
   const [busy, setBusy] = useState(false);
   const [formError, setFormError] = useState('');
+  const [pendingDelete, setPendingDelete] = useState<ApiUser | null>(null);
+  const [deleting, setDeleting] = useState(false);
 
   const load = async () => {
     setLoadError('');
@@ -1077,12 +1124,12 @@ function UsersPage() {
       password: '',
       studentId: user.studentProfile?.studentId ?? '',
       schoolClassId: classId,
-      teacherEmail: classId ? teacherEmailForClass(users, classId) : '',
       enrollmentDate: toDateInput(
         user.studentProfile?.enrollmentDate || user.createdAt || null,
       ),
       teacherName: `${user.firstName} ${user.lastName}`.trim(),
       employeeId: user.staffProfile?.employeeId ?? '',
+      subject: (user.staffProfile?.subject as TeachingSubject | undefined) ?? '',
       assignedClassId:
         user.staffProfile?.assignedClassId ||
         user.staffProfile?.assignedClass?.id ||
@@ -1096,6 +1143,30 @@ function UsersPage() {
     setModal(null);
     setEditingUserId(null);
     setFormError('');
+  };
+
+  const askDeleteUser = (user: ApiUser) => {
+    setPendingDelete(user);
+  };
+
+  const closeDeleteUser = () => {
+    if (deleting) return;
+    setPendingDelete(null);
+  };
+
+  const confirmDeleteUser = async () => {
+    if (!pendingDelete) return;
+    setDeleting(true);
+    try {
+      await api.delete(`/users/${pendingDelete.id}`);
+      setPendingDelete(null);
+      await load();
+    } catch (err) {
+      setLoadError(apiErrorMessage(err, 'Could not delete user'));
+      setPendingDelete(null);
+    } finally {
+      setDeleting(false);
+    }
   };
 
   const onSubmit = async (event: FormEvent) => {
@@ -1112,7 +1183,6 @@ function UsersPage() {
             password: form.password,
             studentId: form.studentId.trim(),
             schoolClassId: form.schoolClassId || undefined,
-            teacherEmail: form.teacherEmail.trim() || undefined,
             enrollmentDate: form.enrollmentDate || undefined,
           });
         } else if (form.role === 'STAFF') {
@@ -1124,6 +1194,7 @@ function UsersPage() {
             email: form.email.trim(),
             password: form.password,
             employeeId: form.employeeId.trim(),
+            subject: form.subject.trim(),
             assignedClassId: form.assignedClassId || undefined,
           });
         } else {
@@ -1142,7 +1213,6 @@ function UsersPage() {
             lastName: form.lastName.trim(),
             studentId: form.studentId.trim(),
             schoolClassId: form.schoolClassId || undefined,
-            teacherEmail: form.teacherEmail.trim() || undefined,
             enrollmentDate: form.enrollmentDate || undefined,
           });
         } else if (form.role === 'STAFF') {
@@ -1152,6 +1222,7 @@ function UsersPage() {
             lastName: names.lastName || names.firstName,
             email: form.email.trim(),
             employeeId: form.employeeId.trim(),
+            subject: form.subject.trim(),
             assignedClassId: form.assignedClassId || null,
           });
         } else {
@@ -1218,9 +1289,16 @@ function UsersPage() {
                 <Card key={user.id} className="p-4">
                   <div className="flex items-start justify-between gap-2">
                     <PersonCell name={name} sub={user.email} />
-                    <IconButton label={`Edit ${name}`} onClick={() => openEdit(user)}>
-                      <Pencil className="h-4 w-4" />
-                    </IconButton>
+                    <div className="flex shrink-0 items-center gap-1">
+                      <IconButton label={`Edit ${name}`} onClick={() => openEdit(user)}>
+                        <Pencil className="h-4 w-4" />
+                      </IconButton>
+                      {currentUser?.id !== user.id && (
+                        <IconButton label={`Delete ${name}`} onClick={() => askDeleteUser(user)}>
+                          <Trash2 className="h-4 w-4" />
+                        </IconButton>
+                      )}
+                    </div>
                   </div>
                   <div className="mt-3 flex flex-wrap gap-x-4 gap-y-2 text-sm">
                     <p className="text-gray-500">
@@ -1253,9 +1331,16 @@ function UsersPage() {
                       <Badge tone={user.isActive ? 'green' : 'red'}>{status}</Badge>
                     </td>
                     <td className="px-2 py-3 text-right">
-                      <IconButton label={`Edit ${name}`} onClick={() => openEdit(user)}>
-                        <Pencil className="h-4 w-4" />
-                      </IconButton>
+                      <div className="inline-flex items-center gap-1">
+                        <IconButton label={`Edit ${name}`} onClick={() => openEdit(user)}>
+                          <Pencil className="h-4 w-4" />
+                        </IconButton>
+                        {currentUser?.id !== user.id && (
+                          <IconButton label={`Delete ${name}`} onClick={() => askDeleteUser(user)}>
+                            <Trash2 className="h-4 w-4" />
+                          </IconButton>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 );
@@ -1280,7 +1365,6 @@ function UsersPage() {
           mode={modal}
           form={form}
           classes={classes}
-          users={users}
           busy={busy}
           error={formError}
           onChange={setForm}
@@ -1288,121 +1372,779 @@ function UsersPage() {
           onSubmit={onSubmit}
         />
       )}
+
+      {pendingDelete && (
+        <ConfirmModal
+          title="Delete user?"
+          description={
+            <>
+              “{pendingDelete.firstName} {pendingDelete.lastName}” will be permanently removed.
+              This cannot be undone.
+            </>
+          }
+          confirmLabel="Delete user"
+          busy={deleting}
+          onConfirm={() => {
+            void confirmDeleteUser();
+          }}
+          onClose={closeDeleteUser}
+        />
+      )}
     </>
+  );
+}
+
+type ApiClass = {
+  id: string;
+  name: string;
+  section: string;
+  academicYear?: string | null;
+  _count?: { students: number; staff: number };
+  staff?: Array<{
+    user: { firstName: string; lastName: string };
+  }>;
+};
+
+type ClassFormState = {
+  name: string;
+  section: string;
+  academicYear: string;
+};
+
+const EMPTY_CLASS_FORM: ClassFormState = {
+  name: '',
+  section: '',
+  academicYear: '',
+};
+
+function classTeacherNames(item: ApiClass) {
+  const names = (item.staff ?? [])
+    .map((s) => `${s.user.firstName} ${s.user.lastName}`.trim())
+    .filter(Boolean);
+  return names.length ? names.join(', ') : 'No teacher assigned';
+}
+
+function ClassFormModal({
+  mode,
+  form,
+  busy,
+  error,
+  onChange,
+  onClose,
+  onSubmit,
+}: {
+  mode: 'add' | 'edit';
+  form: ClassFormState;
+  busy: boolean;
+  error: string;
+  onChange: (next: ClassFormState) => void;
+  onClose: () => void;
+  onSubmit: (event: FormEvent) => void;
+}) {
+  const inputClass =
+    'mt-1.5 h-10 w-full rounded-lg border border-gray-200 px-3 text-sm text-gray-900 placeholder:text-gray-400 focus:border-blue-600 focus:outline-none focus:ring-1 focus:ring-blue-600';
+
+  return (
+    <Modal onClose={onClose} size="md">
+      <div className="mb-3 flex items-start justify-between gap-3 sm:mb-4">
+        <div className="min-w-0">
+          <h2 className="text-base font-semibold text-gray-900 sm:text-lg">
+            {mode === 'add' ? 'Add class' : 'Edit class'}
+          </h2>
+          <p className="mt-1 hidden text-sm text-gray-500 sm:block">
+            {mode === 'add'
+              ? 'Create a class section for the current year.'
+              : 'Update class and section.'}
+          </p>
+        </div>
+        <IconButton label="Close" onClick={onClose} className="shrink-0">
+          <X className="h-4 w-4" />
+        </IconButton>
+      </div>
+
+      <form onSubmit={onSubmit} className="space-y-2 sm:space-y-3">
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 sm:gap-3">
+          <label className="block text-sm text-gray-700">
+            Class
+            <input
+              value={form.name}
+              onChange={(event) => onChange({ ...form, name: event.target.value })}
+              required
+              placeholder="10"
+              className={inputClass}
+            />
+          </label>
+          <label className="block text-sm text-gray-700">
+            Section
+            <input
+              value={form.section}
+              onChange={(event) => onChange({ ...form, section: event.target.value })}
+              required
+              placeholder="A"
+              className={inputClass}
+            />
+          </label>
+        </div>
+        <label className="block text-sm text-gray-700">
+          Academic year
+          <input
+            value={form.academicYear}
+            onChange={(event) => onChange({ ...form, academicYear: event.target.value })}
+            placeholder="2025-26"
+            className={inputClass}
+          />
+        </label>
+
+        {error && <p className="text-sm text-red-600">{error}</p>}
+
+        <div className="flex justify-end gap-2 pt-1">
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={busy}
+            className="inline-flex h-10 items-center justify-center rounded-lg border border-gray-200 bg-white px-4 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+          >
+            Cancel
+          </button>
+          <PrimaryButton type="submit" disabled={busy}>
+            {busy ? 'Saving...' : mode === 'add' ? 'Create class' : 'Save changes'}
+          </PrimaryButton>
+        </div>
+      </form>
+    </Modal>
   );
 }
 
 function ClassesPage() {
-  return (
-    <>
-      <SectionHeader
-        title="Classes"
-        subtitle="Sections, rooms, and class teachers"
-        action={<PrimaryButton icon={<Plus className="h-4 w-4" />}>Add class</PrimaryButton>}
-      />
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        {CLASSES.map((item) => (
-          <Card key={item.id} className="p-4 md:p-5">
-            <div className="flex items-start justify-between gap-3">
-              <h2 className="font-semibold text-gray-900">{item.name}</h2>
-              <Badge tone="slate">{item.room}</Badge>
-            </div>
-            <div className="mt-4 flex items-center gap-3">
-              <Avatar name={item.teacher} size="sm" />
-              <p className="text-sm text-gray-500">{item.teacher}</p>
-            </div>
-            <div className="mt-4 border-t border-gray-200 pt-3">
-              <p className="text-sm text-gray-400">Students enrolled</p>
-              <p className="mt-1 text-lg font-semibold text-gray-900">{item.students}</p>
-            </div>
-          </Card>
-        ))}
-      </div>
-    </>
-  );
-}
+  const [items, setItems] = useState<ApiClass[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState('');
+  const [modal, setModal] = useState<'add' | 'edit' | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [form, setForm] = useState<ClassFormState>(EMPTY_CLASS_FORM);
+  const [busy, setBusy] = useState(false);
+  const [formError, setFormError] = useState('');
+  const [pendingDelete, setPendingDelete] = useState<ApiClass | null>(null);
+  const [deleting, setDeleting] = useState(false);
 
-function AttendancePage() {
-  const statusTone = (status: string): BadgeTone => {
-    if (status === 'Present') return 'green';
-    if (status === 'Absent') return 'red';
-    return 'amber';
+  const load = async () => {
+    setLoadError('');
+    try {
+      const { data } = await api.get('/classes');
+      setItems(data);
+    } catch (err) {
+      setLoadError(apiErrorMessage(err, 'Could not load classes.'));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    load().catch(console.error);
+  }, []);
+
+  const openAdd = () => {
+    setModal('add');
+    setEditingId(null);
+    setForm(EMPTY_CLASS_FORM);
+    setFormError('');
+  };
+
+  const openEdit = (item: ApiClass) => {
+    setModal('edit');
+    setEditingId(item.id);
+    setForm({
+      name: item.name,
+      section: item.section ?? '',
+      academicYear: item.academicYear ?? '',
+    });
+    setFormError('');
+  };
+
+  const closeModal = () => {
+    if (busy) return;
+    setModal(null);
+    setEditingId(null);
+    setFormError('');
+  };
+
+  const onSubmit = async (event: FormEvent) => {
+    event.preventDefault();
+    setBusy(true);
+    setFormError('');
+    const payload = {
+      name: form.name.trim(),
+      section: form.section.trim(),
+      academicYear: form.academicYear.trim() || undefined,
+    };
+    try {
+      if (modal === 'add') {
+        await api.post('/classes', payload);
+      } else if (modal === 'edit' && editingId) {
+        await api.patch(`/classes/${editingId}`, payload);
+      }
+      setModal(null);
+      setEditingId(null);
+      await load();
+    } catch (err) {
+      setFormError(apiErrorMessage(err, 'Could not save class'));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const askDeleteClass = (item: ApiClass) => {
+    setPendingDelete(item);
+  };
+
+  const closeDeleteClass = () => {
+    if (deleting) return;
+    setPendingDelete(null);
+  };
+
+  const confirmDeleteClass = async () => {
+    if (!pendingDelete) return;
+    setDeleting(true);
+    try {
+      await api.delete(`/classes/${pendingDelete.id}`);
+      setPendingDelete(null);
+      await load();
+    } catch (err) {
+      setLoadError(apiErrorMessage(err, 'Could not delete class'));
+      setPendingDelete(null);
+    } finally {
+      setDeleting(false);
+    }
   };
 
   return (
     <>
-      <SectionHeader title="Attendance" subtitle="Daily register for Term 2, 2026" />
+      <SectionHeader
+        title="Classes"
+        subtitle="Sections and enrolled students"
+        action={
+          <PrimaryButton icon={<Plus className="h-4 w-4" />} onClick={openAdd}>
+            Add class
+          </PrimaryButton>
+        }
+      />
+
+      {loading && <p className="text-sm text-gray-500">Loading classes...</p>}
+      {loadError && <p className="mb-4 text-sm text-red-600">{loadError}</p>}
+
+      {!loading && !loadError && (
+        <>
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            {items.map((item) => {
+              const teacher = classTeacherNames(item);
+              const label = formatClassLabel(item.name, item.section);
+              return (
+                <Card key={item.id} className="p-4 md:p-5">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <h2 className="font-semibold text-gray-900">{label}</h2>
+                      {item.academicYear && (
+                        <p className="mt-1 text-sm text-gray-400">{item.academicYear}</p>
+                      )}
+                    </div>
+                    <div className="flex shrink-0 items-center gap-1">
+                      <IconButton label={`Edit ${label}`} onClick={() => openEdit(item)}>
+                        <Pencil className="h-4 w-4" />
+                      </IconButton>
+                      <IconButton label={`Delete ${label}`} onClick={() => askDeleteClass(item)}>
+                        <Trash2 className="h-4 w-4" />
+                      </IconButton>
+                    </div>
+                  </div>
+                  <div className="mt-4 flex items-center gap-3">
+                    <Avatar name={teacher} size="sm" />
+                    <div className="min-w-0">
+                      <p className="truncate text-sm text-gray-500">{teacher}</p>
+                    </div>
+                  </div>
+                  <div className="mt-4 border-t border-gray-200 pt-3">
+                    <p className="text-sm text-gray-400">Students enrolled</p>
+                    <p className="mt-1 text-lg font-semibold text-gray-900">
+                      {item._count?.students ?? 0}
+                    </p>
+                  </div>
+                </Card>
+              );
+            })}
+          </div>
+
+          {!items.length && (
+            <Card className="mt-3 p-6 text-center">
+              <p className="text-sm text-gray-500">No classes yet. Use Add class to create one.</p>
+            </Card>
+          )}
+        </>
+      )}
+
+      {modal && (
+        <ClassFormModal
+          mode={modal}
+          form={form}
+          busy={busy}
+          error={formError}
+          onChange={setForm}
+          onClose={closeModal}
+          onSubmit={onSubmit}
+        />
+      )}
+
+      {pendingDelete && (
+        <ConfirmModal
+          title="Delete class?"
+          description={
+            <>
+              “{formatClassLabel(pendingDelete.name, pendingDelete.section)}” will be permanently
+              removed. This cannot be undone.
+            </>
+          }
+          confirmLabel="Delete class"
+          busy={deleting}
+          onConfirm={() => {
+            void confirmDeleteClass();
+          }}
+          onClose={closeDeleteClass}
+        />
+      )}
+    </>
+  );
+}
+
+type AttendanceStatusFilter = 'ALL' | 'PRESENT' | 'ABSENT' | 'LATE';
+
+type ApiAttendance = {
+  id: string;
+  date: string;
+  status: 'PRESENT' | 'ABSENT' | 'LATE' | 'EXCUSED';
+  remarks?: string | null;
+  schoolClassId?: string | null;
+  student?: {
+    id: string;
+    firstName: string;
+    lastName: string;
+    email: string;
+    studentProfile?: { studentId?: string | null } | null;
+  } | null;
+  schoolClass?: { id: string; name: string; section?: string | null } | null;
+};
+
+function attendanceStatusLabel(status: string) {
+  if (status === 'PRESENT') return 'Present';
+  if (status === 'ABSENT') return 'Absent';
+  if (status === 'LATE') return 'Late';
+  if (status === 'EXCUSED') return 'Excused';
+  return status;
+}
+
+function attendanceStatusTone(status: string): BadgeTone {
+  if (status === 'PRESENT') return 'green';
+  if (status === 'ABSENT') return 'red';
+  if (status === 'LATE') return 'amber';
+  return 'slate';
+}
+
+function todayInputValue() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function formatAttendanceDate(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleDateString(undefined, {
+    weekday: 'long',
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric',
+  });
+}
+
+function AttendancePage() {
+  const [classes, setClasses] = useState<SchoolClassOption[]>([]);
+  const [records, setRecords] = useState<ApiAttendance[]>([]);
+  const [date, setDate] = useState(todayInputValue);
+  const [classId, setClassId] = useState('all');
+  const [statusFilter, setStatusFilter] = useState<AttendanceStatusFilter>('ALL');
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState('');
+
+  const load = async () => {
+    setLoadError('');
+    try {
+      const params: Record<string, string> = { date };
+      if (classId !== 'all') params.schoolClassId = classId;
+      const [classesRes, attendanceRes] = await Promise.all([
+        api.get('/classes'),
+        api.get('/attendance', { params }),
+      ]);
+      setClasses(classesRes.data);
+      setRecords(attendanceRes.data);
+    } catch (err) {
+      setLoadError(apiErrorMessage(err, 'Could not load attendance.'));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    setLoading(true);
+    load().catch(console.error);
+  }, [date, classId]);
+
+  const selectedClass = classes.find((item) => item.id === classId);
+  const classLabel =
+    classId === 'all'
+      ? 'All classes'
+      : selectedClass
+        ? formatClassLabel(selectedClass.name, selectedClass.section)
+        : 'Selected class';
+
+  const counts = useMemo(() => {
+    const present = records.filter((r) => r.status === 'PRESENT').length;
+    const absent = records.filter((r) => r.status === 'ABSENT').length;
+    const late = records.filter((r) => r.status === 'LATE').length;
+    const markedClassIds = new Set(
+      records.map((r) => r.schoolClassId || r.schoolClass?.id).filter(Boolean),
+    );
+    return {
+      present,
+      absent,
+      late,
+      total: records.length,
+      markedSections: markedClassIds.size,
+      sectionsTotal: classes.length,
+    };
+  }, [records, classes.length]);
+
+  const filtered = useMemo(() => {
+    if (statusFilter === 'ALL') return records;
+    return records.filter((row) => row.status === statusFilter);
+  }, [records, statusFilter]);
+
+  const statusOptions: { value: AttendanceStatusFilter; label: string }[] = [
+    { value: 'ALL', label: 'All' },
+    { value: 'PRESENT', label: 'Present' },
+    { value: 'ABSENT', label: 'Absent' },
+    { value: 'LATE', label: 'Late' },
+  ];
+
+  return (
+    <>
+      <SectionHeader title="Attendance" subtitle="Daily register across classes" />
+
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4 lg:gap-4">
-        <StatCard label="Present today" value="1,180" subtext="94.6% of campus" icon={<Check className="h-4 w-4" />} />
-        <StatCard label="Absent today" value="52" subtext="4.2% of campus" icon={<X className="h-4 w-4" />} />
-        <StatCard label="Late arrivals" value="16" subtext="1.3% of campus" icon={<Bell className="h-4 w-4" />} />
-        <StatCard label="Sections marked" value="28 / 32" subtext="4 still open" icon={<ClipboardCheck className="h-4 w-4" />} />
+        <StatCard
+          label="Present"
+          value={String(counts.present)}
+          subtext={counts.total ? `${Math.round((counts.present / counts.total) * 100)}% of marked` : 'No records'}
+          icon={<Check className="h-4 w-4" />}
+        />
+        <StatCard
+          label="Absent"
+          value={String(counts.absent)}
+          subtext={counts.total ? `${Math.round((counts.absent / counts.total) * 100)}% of marked` : 'No records'}
+          icon={<X className="h-4 w-4" />}
+        />
+        <StatCard
+          label="Late"
+          value={String(counts.late)}
+          subtext={counts.total ? `${Math.round((counts.late / counts.total) * 100)}% of marked` : 'No records'}
+          icon={<Bell className="h-4 w-4" />}
+        />
+        <StatCard
+          label="Sections marked"
+          value={`${counts.markedSections} / ${counts.sectionsTotal || 0}`}
+          subtext={formatAttendanceDate(date)}
+          icon={<ClipboardCheck className="h-4 w-4" />}
+        />
       </div>
-      <div className="mt-6 mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <h2 className="font-semibold text-gray-900">Grade 8 - A</h2>
-          <p className="text-sm text-gray-400">Friday, 11 September 2026</p>
+
+      <div className="mt-6 mb-4 flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+        <div className="min-w-0">
+          <h2 className="font-semibold text-gray-900">{classLabel}</h2>
+          <p className="text-sm text-gray-400">{formatAttendanceDate(date)}</p>
         </div>
-        <button
-          type="button"
-          className="inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-gray-200 bg-white px-3 text-sm font-medium text-gray-700 hover:bg-gray-50"
-        >
-          Change section
-          <ChevronDown className="h-4 w-4 text-gray-400" />
-        </button>
+        <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
+          <label className="block text-sm text-gray-700 sm:w-40">
+            <span className="sr-only">Date</span>
+            <input
+              type="date"
+              value={date}
+              onChange={(event) => setDate(event.target.value)}
+              className="h-10 w-full rounded-lg border border-gray-200 bg-white px-3 text-sm text-gray-700 focus:border-blue-600 focus:outline-none focus:ring-1 focus:ring-blue-600"
+            />
+          </label>
+          <label className="relative block text-sm text-gray-700 sm:min-w-[12rem]">
+            <span className="sr-only">Class</span>
+            <select
+              value={classId}
+              onChange={(event) => setClassId(event.target.value)}
+              className="h-10 w-full appearance-none rounded-lg border border-gray-200 bg-white py-2 pl-3 pr-9 text-sm font-medium text-gray-700 hover:bg-gray-50 focus:border-blue-600 focus:outline-none focus:ring-1 focus:ring-blue-600"
+            >
+              <option value="all">All classes</option>
+              {classes.map((item) => (
+                <option key={item.id} value={item.id}>
+                  {formatClassLabel(item.name, item.section)}
+                </option>
+              ))}
+            </select>
+            <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
+          </label>
+          <div className="flex flex-wrap gap-1.5">
+            {statusOptions.map((option) => {
+              const active = statusFilter === option.value;
+              return (
+                <button
+                  key={option.value}
+                  type="button"
+                  onClick={() => setStatusFilter(option.value)}
+                  className={cn(
+                    'inline-flex h-10 items-center rounded-lg border px-3 text-sm font-medium',
+                    active
+                      ? 'border-blue-600 bg-blue-50 text-blue-700'
+                      : 'border-gray-200 bg-white text-gray-600 hover:bg-gray-50',
+                  )}
+                >
+                  {option.label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
       </div>
-      <TableShell columns={['Roll no.', 'Student', 'Status', '']}>
-        {ATTENDANCE_ROWS.map((row) => (
-          <tr key={row.roll} className="hover:bg-gray-50">
-            <td className="px-4 py-3 text-gray-500">{row.roll}</td>
-            <td className="px-4 py-3">
-              <PersonCell name={row.name} />
-            </td>
-            <td className="px-4 py-3">
-              <Badge tone={statusTone(row.status)}>{row.status}</Badge>
-            </td>
-            <td className="px-2 py-3 text-right">
-              <OverflowMenu />
-            </td>
-          </tr>
-        ))}
-      </TableShell>
+
+      {loading && <p className="text-sm text-gray-500">Loading attendance...</p>}
+      {loadError && <p className="mb-4 text-sm text-red-600">{loadError}</p>}
+
+      {!loading && !loadError && (
+        <>
+          <div className="space-y-3 md:hidden">
+            {filtered.map((row) => {
+              const name = `${row.student?.firstName ?? ''} ${row.student?.lastName ?? ''}`.trim() || 'Student';
+              const roll = row.student?.studentProfile?.studentId || '—';
+              return (
+                <Card key={row.id} className="p-4">
+                  <div className="flex items-start justify-between gap-2">
+                    <PersonCell name={name} sub={`Roll ${roll}`} />
+                    <Badge tone={attendanceStatusTone(row.status)}>
+                      {attendanceStatusLabel(row.status)}
+                    </Badge>
+                  </div>
+                  {classId === 'all' && row.schoolClass?.name && (
+                    <p className="mt-2 text-sm text-gray-400">
+                      {formatClassLabel(row.schoolClass.name, row.schoolClass.section)}
+                    </p>
+                  )}
+                </Card>
+              );
+            })}
+          </div>
+
+          <div className="hidden md:block">
+            <TableShell
+              columns={
+                classId === 'all'
+                  ? ['Roll no.', 'Student', 'Class', 'Status']
+                  : ['Roll no.', 'Student', 'Status']
+              }
+            >
+              {filtered.map((row) => {
+                const name = `${row.student?.firstName ?? ''} ${row.student?.lastName ?? ''}`.trim() || 'Student';
+                const roll = row.student?.studentProfile?.studentId || '—';
+                return (
+                  <tr key={row.id} className="hover:bg-gray-50">
+                    <td className="px-4 py-3 text-gray-500">{roll}</td>
+                    <td className="px-4 py-3">
+                      <PersonCell name={name} />
+                    </td>
+                    {classId === 'all' && (
+                      <td className="px-4 py-3 text-gray-500">
+                        {row.schoolClass
+                          ? formatClassLabel(row.schoolClass.name, row.schoolClass.section)
+                          : '—'}
+                      </td>
+                    )}
+                    <td className="px-4 py-3">
+                      <Badge tone={attendanceStatusTone(row.status)}>
+                        {attendanceStatusLabel(row.status)}
+                      </Badge>
+                    </td>
+                  </tr>
+                );
+              })}
+            </TableShell>
+          </div>
+
+          {!filtered.length && (
+            <Card className="mt-3 p-6 text-center">
+              <p className="text-sm text-gray-500">
+                {records.length
+                  ? 'No records match this status filter.'
+                  : 'No attendance marked for this date and class.'}
+              </p>
+            </Card>
+          )}
+        </>
+      )}
     </>
   );
 }
 
 function GradesPage() {
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState('');
+  const [schoolTopper, setSchoolTopper] = useState<{
+    studentName: string;
+    rollNo: string;
+    classLabel: string;
+    totalScore: number;
+    totalMax: number;
+    percentage: number;
+  } | null>(null);
+  const [schoolPending, setSchoolPending] = useState(true);
+  const [classToppers, setClassToppers] = useState<
+    Array<{
+      classId: string;
+      studentUserId: string;
+      studentName: string;
+      rollNo: string;
+      classLabel: string;
+      totalScore: number;
+      totalMax: number;
+      percentage: number;
+      subjectsExpected: number;
+      studentsComplete: number;
+      studentsTotal: number;
+      pending?: boolean;
+    }>
+  >([]);
+
+  const load = async () => {
+    setLoadError('');
+    try {
+      const { data } = await api.get('/grades/toppers');
+      setSchoolTopper(data.schoolTopper);
+      setSchoolPending(Boolean(data.schoolPending ?? !data.schoolTopper));
+      setClassToppers(data.classToppers ?? []);
+    } catch (err) {
+      setLoadError(apiErrorMessage(err, 'Could not load grade toppers.'));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    load().catch(console.error);
+  }, []);
+
   return (
     <>
       <SectionHeader
         title="Grades"
-        subtitle="Class averages for the latest assessments"
-        action={<PrimaryButton icon={<Plus className="h-4 w-4" />}>Enter grades</PrimaryButton>}
+        subtitle="Complete only after all 10 subjects are marked for every student"
       />
-      <TableShell columns={['Subject', 'Section', 'Class average', 'Top scorer', '']}>
-        {GRADE_ROWS.map((row) => (
-          <tr key={`${row.subject}-${row.section}`} className="hover:bg-gray-50">
-            <td className="px-4 py-3 font-medium text-gray-900">{row.subject}</td>
-            <td className="px-4 py-3 text-gray-500">{row.section}</td>
-            <td className="px-4 py-3">
-              <span className="inline-flex items-center gap-1.5">
-                <span className="font-medium text-gray-900">{row.average}%</span>
-                {row.trend === 'up' ? (
-                  <TrendingUp className="h-3.5 w-3.5 text-green-600" />
+
+      {loading && <p className="text-sm text-gray-500">Loading toppers...</p>}
+      {loadError && <p className="mb-4 text-sm text-red-600">{loadError}</p>}
+
+      {!loading && !loadError && (
+        <>
+          <Card className="mb-4 p-4 md:p-5">
+            <p className="text-sm font-medium text-gray-500">School topper</p>
+            {!schoolPending && schoolTopper ? (
+              <div className="mt-3 flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <p className="text-lg font-semibold text-gray-900">
+                    {schoolTopper.studentName}
+                  </p>
+                  <p className="text-sm text-gray-500">
+                    {schoolTopper.classLabel} · Roll {schoolTopper.rollNo}
+                  </p>
+                </div>
+                <p className="text-base font-semibold text-blue-700">
+                  {schoolTopper.totalScore}/{schoolTopper.totalMax} ({schoolTopper.percentage}%)
+                </p>
+              </div>
+            ) : (
+              <div className="mt-3">
+                <Badge tone="amber">Grade is pending</Badge>
+                <p className="mt-2 text-sm text-gray-500">
+                  School topper appears after every class has all 10 subject marks for every
+                  student.
+                </p>
+              </div>
+            )}
+          </Card>
+
+          <div className="space-y-3 md:hidden">
+            {classToppers.map((row) => (
+              <Card key={row.classId} className="p-4">
+                <p className="font-semibold text-gray-900">{row.classLabel}</p>
+                {row.pending || !row.studentUserId ? (
+                  <div className="mt-2">
+                    <Badge tone="amber">Grade is pending</Badge>
+                    <p className="mt-2 text-sm text-gray-500">
+                      {row.studentsComplete}/{row.studentsTotal || 0} students with all{' '}
+                      {row.subjectsExpected || 10} subjects marked
+                    </p>
+                  </div>
                 ) : (
-                  <TrendingDown className="h-3.5 w-3.5 text-red-600" />
+                  <div className="mt-2">
+                    <PersonCell name={row.studentName} sub={`Roll ${row.rollNo}`} />
+                    <p className="mt-2 text-sm text-gray-500">
+                      {row.totalScore}/{row.totalMax} ({row.percentage}%)
+                    </p>
+                  </div>
                 )}
-              </span>
-            </td>
-            <td className="px-4 py-3">
-              <PersonCell name={row.top} />
-            </td>
-            <td className="px-2 py-3 text-right">
-              <OverflowMenu />
-            </td>
-          </tr>
-        ))}
-      </TableShell>
+              </Card>
+            ))}
+          </div>
+
+          <div className="hidden md:block">
+            <TableShell columns={['Class', 'Status', 'Topper', 'Roll', 'Total', 'Percentage']}>
+              {classToppers.map((row) => (
+                <tr key={row.classId} className="hover:bg-gray-50">
+                  <td className="px-4 py-3 font-medium text-gray-900">{row.classLabel}</td>
+                  <td className="px-4 py-3">
+                    {row.pending || !row.studentUserId ? (
+                      <Badge tone="amber">Grade is pending</Badge>
+                    ) : (
+                      <Badge tone="green">Complete</Badge>
+                    )}
+                  </td>
+                  <td className="px-4 py-3">
+                    {row.pending || !row.studentUserId ? (
+                      <span className="text-gray-400">—</span>
+                    ) : (
+                      <PersonCell name={row.studentName} />
+                    )}
+                  </td>
+                  <td className="px-4 py-3 text-gray-500">
+                    {row.pending || !row.studentUserId ? '—' : row.rollNo}
+                  </td>
+                  <td className="px-4 py-3 text-gray-500">
+                    {row.pending || !row.studentUserId
+                      ? '—'
+                      : `${row.totalScore} / ${row.totalMax}`}
+                  </td>
+                  <td className="px-4 py-3 text-gray-500">
+                    {row.pending || !row.studentUserId ? '—' : `${row.percentage}%`}
+                  </td>
+                </tr>
+              ))}
+            </TableShell>
+          </div>
+
+          {!classToppers.length && (
+            <Card className="mt-3 p-6 text-center">
+              <p className="text-sm text-gray-500">No classes found.</p>
+            </Card>
+          )}
+        </>
+      )}
     </>
   );
 }
@@ -1418,6 +2160,7 @@ function LeavePage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [reviewBusyId, setReviewBusyId] = useState<string | null>(null);
+  const [studentClassFilter, setStudentClassFilter] = useState('All classes');
 
   const load = async () => {
     setError('');
@@ -1436,7 +2179,21 @@ function LeavePage() {
   }, []);
 
   const teacherLeave = items.filter((item) => item.requester?.role === 'STAFF');
-  const studentLeave = items.filter((item) => item.requester?.role === 'STUDENT');
+  const studentLeaveAll = items.filter((item) => item.requester?.role === 'STUDENT');
+
+  const studentClassOptions = useMemo(() => {
+    const names = new Set<string>();
+    for (const item of studentLeaveAll) {
+      const className = leaveClassName(item);
+      if (className && className !== '—') names.add(className);
+    }
+    return ['All classes', ...Array.from(names).sort((a, b) => a.localeCompare(b))];
+  }, [studentLeaveAll]);
+
+  const studentLeave = useMemo(() => {
+    if (studentClassFilter === 'All classes') return studentLeaveAll;
+    return studentLeaveAll.filter((item) => leaveClassName(item) === studentClassFilter);
+  }, [studentLeaveAll, studentClassFilter]);
 
   const review = async (id: string, status: 'APPROVED' | 'REJECTED') => {
     setReviewBusyId(id);
@@ -1549,10 +2306,28 @@ function LeavePage() {
             )}
           </div>
 
-          <h2 className="mb-3 text-base font-semibold text-gray-900">Student leave</h2>
-          <p className="mb-3 text-sm text-gray-500">
-            Reviewed by each student’s class teacher. Admin view only.
-          </p>
+          <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+            <div>
+              <h2 className="text-base font-semibold text-gray-900">Student leave</h2>
+              <p className="mt-1 text-sm text-gray-500">
+                Reviewed by each student’s class teacher. Admin view only.
+              </p>
+            </div>
+            <label className="block text-sm text-gray-700 sm:w-56">
+              Class
+              <select
+                value={studentClassFilter}
+                onChange={(event) => setStudentClassFilter(event.target.value)}
+                className="mt-1.5 h-10 w-full rounded-lg border border-gray-200 bg-white px-3 text-sm text-gray-700 focus:border-blue-600 focus:outline-none focus:ring-1 focus:ring-blue-600"
+              >
+                {studentClassOptions.map((name) => (
+                  <option key={name} value={name}>
+                    {name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
           <div className="space-y-3 md:hidden">
             {studentLeave.map((row) => (
               <Card key={row.id} className="p-4">
@@ -1577,7 +2352,11 @@ function LeavePage() {
             ))}
             {!studentLeave.length && (
               <Card className="p-6 text-center">
-                <p className="text-sm text-gray-500">No student leave requests.</p>
+                <p className="text-sm text-gray-500">
+                  {studentLeaveAll.length
+                    ? 'No student leave requests for this class.'
+                    : 'No student leave requests.'}
+                </p>
               </Card>
             )}
           </div>
@@ -1603,7 +2382,11 @@ function LeavePage() {
             </TableShell>
             {!studentLeave.length && (
               <Card className="mt-3 p-6 text-center">
-                <p className="text-sm text-gray-500">No student leave requests.</p>
+                <p className="text-sm text-gray-500">
+                  {studentLeaveAll.length
+                    ? 'No student leave requests for this class.'
+                    : 'No student leave requests.'}
+                </p>
               </Card>
             )}
           </div>

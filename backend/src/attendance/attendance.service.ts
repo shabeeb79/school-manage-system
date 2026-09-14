@@ -3,12 +3,22 @@ import { UserRole } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { MarkAttendanceDto } from './dto/mark-attendance.dto';
 
+/** Parse YYYY-MM-DD as a calendar date (no timezone shift). */
+function parseDateOnly(value: string) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value.trim());
+  if (!match) return new Date(value);
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  return new Date(Date.UTC(year, month - 1, day));
+}
+
 @Injectable()
 export class AttendanceService {
   constructor(private prisma: PrismaService) {}
 
   async mark(markedById: string, dto: MarkAttendanceDto) {
-    const date = new Date(dto.date);
+    const date = parseDateOnly(dto.date);
     const results = [];
     for (const entry of dto.entries) {
       const record = await this.prisma.attendance.upsert({
@@ -33,6 +43,7 @@ export class AttendanceService {
           student: {
             select: { id: true, firstName: true, lastName: true },
           },
+          schoolClass: true,
         },
       });
       results.push(record);
@@ -48,7 +59,7 @@ export class AttendanceService {
     schoolClassId?: string;
   }) {
     const where: Record<string, unknown> = {};
-    if (params.date) where.date = new Date(params.date);
+    if (params.date) where.date = parseDateOnly(params.date);
     if (params.schoolClassId) where.schoolClassId = params.schoolClassId;
 
     if (params.role === UserRole.STUDENT) {
@@ -60,7 +71,16 @@ export class AttendanceService {
         where: { userId: params.userId },
       });
       if (staff?.assignedClassId) {
-        where.schoolClassId = staff.assignedClassId;
+        const classStudents = await this.prisma.studentProfile.findMany({
+          where: { schoolClassId: staff.assignedClassId },
+          select: { userId: true },
+        });
+        const studentIds = classStudents.map((s) => s.userId);
+        // Match by class id OR by students in the assigned class (covers older rows)
+        where.OR = [
+          { schoolClassId: staff.assignedClassId },
+          ...(studentIds.length ? [{ studentId: { in: studentIds } }] : []),
+        ];
       }
     }
 
@@ -68,7 +88,13 @@ export class AttendanceService {
       where,
       include: {
         student: {
-          select: { id: true, firstName: true, lastName: true, email: true },
+          select: {
+            id: true,
+            firstName: true,
+            lastName: true,
+            email: true,
+            studentProfile: { select: { studentId: true } },
+          },
         },
         schoolClass: true,
         markedBy: {

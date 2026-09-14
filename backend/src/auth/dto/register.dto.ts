@@ -5,7 +5,7 @@ import {
   IsString,
   MinLength,
 } from 'class-validator';
-import { UserRole } from '@prisma/client';
+import { TeachingSubject, UserRole } from '@prisma/client';
 
 export class RegisterDto {
   @IsEmail()
@@ -45,8 +45,8 @@ export class RegisterDto {
   department?: string;
 
   @IsOptional()
-  @IsString()
-  subject?: string;
+  @IsEnum(TeachingSubject)
+  subject?: TeachingSubject;
 
   @IsOptional()
   @IsString()
@@ -59,8 +59,4 @@ export class RegisterDto {
   @IsOptional()
   @IsString()
   enrollmentDate?: string;
-
-  @IsOptional()
-  @IsString()
-  teacherEmail?: string;
 }

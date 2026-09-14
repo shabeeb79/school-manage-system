@@ -20,14 +20,14 @@ export interface User {
   studentProfile?: {
     studentId: string;
     schoolClassId?: string;
-    schoolClass?: { id: string; name: string };
+    schoolClass?: { id: string; name: string; section?: string | null };
     parentName?: string;
     parentPhone?: string;
   } | null;
   staffProfile?: {
     employeeId: string;
     assignedClassId?: string;
-    assignedClass?: { id: string; name: string };
+    assignedClass?: { id: string; name: string; section?: string | null };
     department?: string;
     subject?: string;
   } | null;

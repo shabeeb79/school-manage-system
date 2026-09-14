@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Param,
   Patch,
@@ -46,7 +47,6 @@ export class UsersController {
       parentPhone?: string;
       address?: string;
       schoolClassId?: string;
-      teacherEmail?: string;
       enrollmentDate?: string;
     },
   ) {
@@ -72,7 +72,6 @@ export class UsersController {
       parentPhone?: string;
       address?: string;
       schoolClassId?: string;
-      teacherEmail?: string;
       enrollmentDate?: string;
     },
   ) {
@@ -119,5 +118,11 @@ export class UsersController {
   @Roles(UserRole.ADMIN)
   setActive(@Param('id') id: string, @Body('isActive') isActive: boolean) {
     return this.users.setActive(id, isActive);
+  }
+
+  @Delete(':id')
+  @Roles(UserRole.ADMIN)
+  remove(@CurrentUser() user: { id: string }, @Param('id') id: string) {
+    return this.users.remove(id, user.id);
   }
 }

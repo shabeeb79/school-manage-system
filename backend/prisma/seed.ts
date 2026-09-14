@@ -24,8 +24,7 @@ async function main() {
 
   const classA = await prisma.schoolClass.create({
     data: {
-      name: 'Grade 10 - A',
-      gradeLevel: '10',
+      name: '10',
       section: 'A',
       academicYear: '2025-26',
     },
@@ -33,8 +32,7 @@ async function main() {
 
   const classB = await prisma.schoolClass.create({
     data: {
-      name: 'Grade 9 - B',
-      gradeLevel: '9',
+      name: '9',
       section: 'B',
       academicYear: '2025-26',
     },
@@ -61,9 +59,28 @@ async function main() {
         create: {
           employeeId: 'EMP001',
           department: 'Science',
-          subject: 'Physics',
+          subject: 'PHYSICS',
           assignedClassId: classA.id,
           phone: '555-0100',
+        },
+      },
+    },
+  });
+
+  const mathStaff = await prisma.user.create({
+    data: {
+      email: 'math@school.com',
+      password,
+      firstName: 'Maya',
+      lastName: 'Math',
+      role: UserRole.STAFF,
+      staffProfile: {
+        create: {
+          employeeId: 'EMP002',
+          department: 'Mathematics',
+          subject: 'MATHEMATICS',
+          assignedClassId: classB.id,
+          phone: '555-0101',
         },
       },
     },
@@ -106,7 +123,7 @@ async function main() {
     },
   });
 
-  await prisma.user.create({
+  const student3 = await prisma.user.create({
     data: {
       email: 'casey@school.com',
       password,
@@ -179,33 +196,30 @@ async function main() {
     data: [
       {
         studentId: student1.id,
-        subject: 'Physics',
-        examName: 'Midterm',
+        subject: 'PHYSICS',
+        examName: 'Term Assessment',
         score: 88,
         maxScore: 100,
         gradeLetter: 'A',
-        term: 'Term 1',
-        recordedById: staff.id,
-      },
-      {
-        studentId: student1.id,
-        subject: 'Mathematics',
-        examName: 'Midterm',
-        score: 92,
-        maxScore: 100,
-        gradeLetter: 'A+',
-        term: 'Term 1',
         recordedById: staff.id,
       },
       {
         studentId: student2.id,
-        subject: 'Physics',
-        examName: 'Midterm',
+        subject: 'PHYSICS',
+        examName: 'Term Assessment',
         score: 76,
         maxScore: 100,
-        gradeLetter: 'B',
-        term: 'Term 1',
+        gradeLetter: 'C',
         recordedById: staff.id,
+      },
+      {
+        studentId: student3.id,
+        subject: 'MATHEMATICS',
+        examName: 'Term Assessment',
+        score: 81,
+        maxScore: 100,
+        gradeLetter: 'B',
+        recordedById: mathStaff.id,
       },
     ],
   });
@@ -289,7 +303,9 @@ async function main() {
   console.log('Seed complete.');
   console.log('Demo logins (password: password123):');
   console.log('  admin@school.com');
-  console.log('  staff@school.com');
+  console.log('  staff@school.com (Physics · 10-A)');
+  console.log('  math@school.com (Mathematics · 9-B)');
+  console.log('  Tip: assign one teacher per subject to a class; toppers need all 10 subjects.');
   console.log('  student@school.com');
 }
 

@@ -141,19 +141,22 @@ export function PrimaryButton({
   onClick,
   type = 'button',
   className,
+  disabled,
 }: {
   children: ReactNode;
   icon?: ReactNode;
   onClick?: () => void;
   type?: 'button' | 'submit';
   className?: string;
+  disabled?: boolean;
 }) {
   return (
     <button
       type={type}
       onClick={onClick}
+      disabled={disabled}
       className={cn(
-        'inline-flex h-11 shrink-0 items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 text-sm font-medium text-white hover:bg-blue-700 active:bg-blue-800 sm:h-10',
+        'inline-flex h-11 shrink-0 items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 text-sm font-medium text-white hover:bg-blue-700 active:bg-blue-800 disabled:cursor-not-allowed disabled:opacity-50 sm:h-10',
         className,
       )}
     >
@@ -255,6 +258,62 @@ export function Modal({
         {children}
       </Card>
     </div>
+  );
+}
+
+export function ConfirmModal({
+  title,
+  description,
+  confirmLabel = 'Confirm',
+  cancelLabel = 'Cancel',
+  tone = 'danger',
+  busy = false,
+  onConfirm,
+  onClose,
+}: {
+  title: string;
+  description?: ReactNode;
+  confirmLabel?: string;
+  cancelLabel?: string;
+  tone?: 'danger' | 'primary';
+  busy?: boolean;
+  onConfirm: () => void;
+  onClose: () => void;
+}) {
+  return (
+    <Modal onClose={busy ? () => undefined : onClose} size="sm">
+      <div className="space-y-4">
+        <div>
+          <h2 className="text-base font-semibold text-gray-900 sm:text-lg">{title}</h2>
+          {description && (
+            <p className="mt-2 text-sm leading-relaxed text-gray-500">{description}</p>
+          )}
+        </div>
+        <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={busy}
+            className="inline-flex h-10 items-center justify-center rounded-lg border border-gray-200 bg-white px-4 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {cancelLabel}
+          </button>
+          <button
+            type="button"
+            onClick={onConfirm}
+            disabled={busy}
+            className={cn(
+              'inline-flex h-10 items-center justify-center rounded-lg px-4 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-50',
+              tone === 'danger'
+                ? 'bg-red-600 hover:bg-red-700 active:bg-red-800'
+                : 'bg-blue-600 hover:bg-blue-700 active:bg-blue-800',
+            )}
+          >
+            {busy ? 'Please wait...' : confirmLabel}
+          </button>
+        </div>
+      </div>
+    </Modal>
   );
 }
 

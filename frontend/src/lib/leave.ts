@@ -16,7 +16,7 @@ export type ApiLeave = {
     email?: string;
     studentProfile?: {
       studentId?: string;
-      schoolClass?: { id: string; name: string } | null;
+      schoolClass?: { id: string; name: string; section?: string | null } | null;
     } | null;
     staffProfile?: {
       employeeId?: string;
@@ -37,7 +37,10 @@ export function leaveRoll(leave: ApiLeave) {
 }
 
 export function leaveClassName(leave: ApiLeave) {
-  return leave.requester?.studentProfile?.schoolClass?.name || '—';
+  const schoolClass = leave.requester?.studentProfile?.schoolClass;
+  if (!schoolClass?.name) return '—';
+  const section = schoolClass.section?.trim();
+  return section ? `${schoolClass.name} - ${section}` : schoolClass.name;
 }
 
 export function formatLeaveDates(startDate: string, endDate: string) {

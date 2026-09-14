@@ -14,10 +14,9 @@ import {
   Plus,
   Search,
   Send,
-  TrendingUp,
   X,
 } from 'lucide-react';
-import { useEffect, useState, type FormEvent, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react';
 import { useAuth } from './auth/AuthContext';
 import api from './api/client';
 import {
@@ -28,6 +27,7 @@ import {
   type ApiLeave,
 } from './lib/leave';
 import { MAX_ASSIGNMENT_MEDIA_BYTES, mediaUrl } from './lib/media';
+import { teachingSubjectLabel } from './lib/subjects';
 import { IconButton, Modal, PostMedia } from './ui';
 
 type PageId =
@@ -251,22 +251,6 @@ function announcementTone(audience: string): BadgeTone {
   return 'slate';
 }
 
-const ATTENDANCE_MONTHS = [
-  { month: 'April 2026', present: 20, total: 21, pct: 95 },
-  { month: 'May 2026', present: 18, total: 20, pct: 90 },
-  { month: 'June 2026', present: 21, total: 22, pct: 95 },
-  { month: 'July 2026', present: 19, total: 22, pct: 86 },
-  { month: 'August 2026', present: 20, total: 21, pct: 95 },
-];
-
-const GRADE_ROWS = [
-  { subject: 'Mathematics', mid: 42, term: 88, grade: 'A' },
-  { subject: 'English', mid: 45, term: 91, grade: 'A+' },
-  { subject: 'Science', mid: 39, term: 82, grade: 'A' },
-  { subject: 'Social Studies', mid: 41, term: 85, grade: 'A' },
-  { subject: 'Malayalam', mid: 38, term: 79, grade: 'B+' },
-];
-
 const UPCOMING = [
   { title: 'Climate change essay', subject: 'Social Studies', due: '16 Sep' },
   { title: 'Quadratic equations worksheet', subject: 'Mathematics', due: '14 Sep' },
@@ -378,6 +362,38 @@ function DashboardPage({
   firstName: string;
   className: string;
 }) {
+  const [attendancePct, setAttendancePct] = useState<string>('—');
+  const [attendanceSub, setAttendanceSub] = useState('Loading attendance...');
+
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      try {
+        const { data } = await api.get('/attendance');
+        if (!active) return;
+        const records = data as Array<{ status: string }>;
+        const total = records.length;
+        const present = records.filter((r) => r.status === 'PRESENT').length;
+        if (!total) {
+          setAttendancePct('—');
+          setAttendanceSub('Waiting for your class teacher to mark attendance');
+          return;
+        }
+        const pct = Math.round((present / total) * 1000) / 10;
+        setAttendancePct(`${pct}%`);
+        setAttendanceSub(`${present} of ${total} days present`);
+      } catch {
+        if (active) {
+          setAttendancePct('—');
+          setAttendanceSub('Could not load attendance');
+        }
+      }
+    })().catch(console.error);
+    return () => {
+      active = false;
+    };
+  }, []);
+
   return (
     <>
       <div className="mb-6">
@@ -394,13 +410,9 @@ function DashboardPage({
               <span className="text-xs font-medium">This term's attendance</span>
               <Flame className="h-4 w-4 text-amber-300" />
             </div>
-            <p className="mt-4 text-4xl font-bold tracking-tight md:text-5xl">92.2%</p>
-            <p className="mt-2 text-sm text-indigo-100">59 of 64 school days present</p>
+            <p className="mt-4 text-4xl font-bold tracking-tight md:text-5xl">{attendancePct}</p>
+            <p className="mt-2 text-sm text-indigo-100">{attendanceSub}</p>
           </div>
-          <p className="mt-6 inline-flex items-center gap-1.5 text-sm font-medium text-emerald-200">
-            <TrendingUp className="h-4 w-4" />
-            Up 1.2% from last term
-          </p>
         </div>
 
         <div className="grid grid-cols-2 gap-4 md:col-span-2 md:row-span-2 md:contents">
@@ -456,8 +468,12 @@ function AnnouncementsPage() {
   const [posts, setPosts] = useState<FeedPost[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const className =
-    user?.studentProfile?.schoolClass?.name || STUDENT.className;
+  const className = (() => {
+    const schoolClass = user?.studentProfile?.schoolClass;
+    if (!schoolClass?.name) return STUDENT.className;
+    const section = schoolClass.section?.trim();
+    return section ? `${schoolClass.name} - ${section}` : schoolClass.name;
+  })();
 
   useEffect(() => {
     let active = true;
@@ -519,103 +535,337 @@ function AnnouncementsPage() {
   );
 }
 
+function attendanceStatusLabel(status: string) {
+  if (status === 'PRESENT') return 'Present';
+  if (status === 'ABSENT') return 'Absent';
+  if (status === 'LATE') return 'Late';
+  if (status === 'EXCUSED') return 'Excused';
+  return status;
+}
+
+function attendanceStatusTone(status: string): BadgeTone {
+  if (status === 'PRESENT') return 'green';
+  if (status === 'ABSENT') return 'red';
+  if (status === 'LATE' || status === 'EXCUSED') return 'amber';
+  return 'slate';
+}
+
+function formatAttendanceDay(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value).slice(0, 10);
+  return date.toLocaleDateString(undefined, {
+    weekday: 'short',
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+    timeZone: 'UTC',
+  });
+}
+
 function AttendancePage() {
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [records, setRecords] = useState<
+    Array<{ id: string; date: string; status: string }>
+  >([]);
+
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      setError('');
+      try {
+        const { data } = await api.get('/attendance');
+        if (active) setRecords(data);
+      } catch (err) {
+        if (active) setError(apiErrorMessage(err, 'Could not load attendance.'));
+      } finally {
+        if (active) setLoading(false);
+      }
+    })().catch(console.error);
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const present = records.filter((r) => r.status === 'PRESENT').length;
+  const absent = records.filter((r) => r.status === 'ABSENT').length;
+  const late = records.filter((r) => r.status === 'LATE' || r.status === 'EXCUSED').length;
+  const total = records.length;
+  const overallPct = total ? Math.round((present / total) * 1000) / 10 : 0;
+
+  const months = useMemo(() => {
+    const map = new Map<string, { present: number; total: number; sortKey: string }>();
+    for (const row of records) {
+      const date = new Date(row.date);
+      if (Number.isNaN(date.getTime())) continue;
+      const sortKey = `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}`;
+      const label = date.toLocaleDateString(undefined, {
+        month: 'long',
+        year: 'numeric',
+        timeZone: 'UTC',
+      });
+      const current = map.get(label) ?? { present: 0, total: 0, sortKey };
+      current.total += 1;
+      if (row.status === 'PRESENT') current.present += 1;
+      map.set(label, current);
+    }
+    return [...map.entries()]
+      .map(([month, data]) => ({
+        month,
+        present: data.present,
+        total: data.total,
+        pct: data.total ? Math.round((data.present / data.total) * 100) : 0,
+        sortKey: data.sortKey,
+      }))
+      .sort((a, b) => b.sortKey.localeCompare(a.sortKey));
+  }, [records]);
+
+  const recentDays = useMemo(
+    () =>
+      [...records].sort(
+        (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime(),
+      ),
+    [records],
+  );
+
   return (
     <>
-      <SectionHeader title="Attendance" subtitle="Your presence record for Term 2" />
-      <div className="mb-5 grid grid-cols-1 gap-3 sm:grid-cols-3">
-        <PlainStat label="Overall attendance" value="92.2%" />
-        <PlainStat label="Days present" value="59" />
-        <PlainStat label="Days absent" value="5" />
-      </div>
+      <SectionHeader
+        title="Attendance"
+        subtitle="Updated each day when your teacher marks the register"
+      />
 
-      <div className="space-y-3 md:hidden">
-        {ATTENDANCE_MONTHS.map((row) => (
-          <Card key={row.month} className="p-4">
-            <p className="font-semibold text-gray-900">{row.month}</p>
-            <dl className="mt-3 space-y-2 text-sm">
-              <div className="flex justify-between gap-3">
-                <dt className="text-gray-400">Present</dt>
-                <dd className="text-gray-700">{row.present}</dd>
-              </div>
-              <div className="flex justify-between gap-3">
-                <dt className="text-gray-400">Total days</dt>
-                <dd className="text-gray-700">{row.total}</dd>
-              </div>
-              <div className="flex items-center justify-between gap-3">
-                <dt className="text-gray-400">Percentage</dt>
-                <dd>
-                  <Badge tone={row.pct >= 90 ? 'green' : 'amber'}>{row.pct}%</Badge>
-                </dd>
-              </div>
-            </dl>
-          </Card>
-        ))}
-      </div>
+      {loading && <p className="text-sm text-gray-500">Loading attendance...</p>}
+      {error && <p className="mb-4 text-sm text-red-600">{error}</p>}
 
-      <div className="hidden md:block">
-        <TableShell columns={['Month', 'Present', 'Total days', 'Percentage']}>
-          {ATTENDANCE_MONTHS.map((row) => (
-            <tr key={row.month} className="hover:bg-violet-50/40">
-              <td className="px-4 py-3 font-medium text-gray-900">{row.month}</td>
-              <td className="px-4 py-3 text-gray-500">{row.present}</td>
-              <td className="px-4 py-3 text-gray-500">{row.total}</td>
-              <td className="px-4 py-3">
-                <Badge tone={row.pct >= 90 ? 'green' : 'amber'}>{row.pct}%</Badge>
-              </td>
-            </tr>
-          ))}
-        </TableShell>
-      </div>
+      {!loading && !error && (
+        <>
+          <div className="mb-5 grid grid-cols-1 gap-3 sm:grid-cols-3">
+            <PlainStat
+              label="Overall attendance"
+              value={total ? `${overallPct}%` : '—'}
+            />
+            <PlainStat label="Days present" value={String(present)} />
+            <PlainStat label="Days absent / late" value={String(absent + late)} />
+          </div>
+
+          {recentDays.length ? (
+            <>
+              <h2 className="mb-3 text-sm font-semibold text-gray-900">Daily record</h2>
+              <div className="mb-6 space-y-3 md:hidden">
+                {recentDays.map((row) => (
+                  <Card key={row.id} className="p-4">
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="font-medium text-gray-900">{formatAttendanceDay(row.date)}</p>
+                      <Badge tone={attendanceStatusTone(row.status)}>
+                        {attendanceStatusLabel(row.status)}
+                      </Badge>
+                    </div>
+                  </Card>
+                ))}
+              </div>
+              <div className="mb-6 hidden md:block">
+                <TableShell columns={['Date', 'Status']}>
+                  {recentDays.map((row) => (
+                    <tr key={row.id} className="hover:bg-violet-50/40">
+                      <td className="px-4 py-3 text-gray-700">{formatAttendanceDay(row.date)}</td>
+                      <td className="px-4 py-3">
+                        <Badge tone={attendanceStatusTone(row.status)}>
+                          {attendanceStatusLabel(row.status)}
+                        </Badge>
+                      </td>
+                    </tr>
+                  ))}
+                </TableShell>
+              </div>
+
+              {months.length > 0 && (
+                <>
+                  <h2 className="mb-3 text-sm font-semibold text-gray-900">Monthly summary</h2>
+                  <div className="hidden md:block">
+                    <TableShell columns={['Month', 'Present', 'Total days', 'Percentage']}>
+                      {months.map((row) => (
+                        <tr key={row.month} className="hover:bg-violet-50/40">
+                          <td className="px-4 py-3 font-medium text-gray-900">{row.month}</td>
+                          <td className="px-4 py-3 text-gray-500">{row.present}</td>
+                          <td className="px-4 py-3 text-gray-500">{row.total}</td>
+                          <td className="px-4 py-3">
+                            <Badge tone={row.pct >= 90 ? 'green' : 'amber'}>{row.pct}%</Badge>
+                          </td>
+                        </tr>
+                      ))}
+                    </TableShell>
+                  </div>
+                </>
+              )}
+            </>
+          ) : (
+            <Card className="p-6 text-center">
+              <p className="text-sm text-gray-500">
+                No attendance records yet. They appear after your teacher marks attendance.
+              </p>
+            </Card>
+          )}
+        </>
+      )}
     </>
   );
 }
 
 function GradesPage() {
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [card, setCard] = useState<{
+    complete: boolean;
+    pending: boolean;
+    subjectsMarked: number;
+    subjectsExpected: number;
+    subjects: Array<{
+      subject: string;
+      status: 'ready' | 'pending';
+      score: number | null;
+      maxScore: number;
+      gradeLetter: string | null;
+    }>;
+    totalScore: number | null;
+    totalMax: number | null;
+    percentage: number | null;
+    overallLetter: string | null;
+    examName?: string;
+  } | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      setError('');
+      try {
+        const { data } = await api.get('/grades/my-card');
+        if (active) setCard(data);
+      } catch (err) {
+        if (active) setError(apiErrorMessage(err, 'Could not load grade card.'));
+      } finally {
+        if (active) setLoading(false);
+      }
+    })().catch(console.error);
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const pending = !card || card.pending || !card.complete;
+
   return (
     <>
-      <SectionHeader title="Grade Card" subtitle="Term 2 assessment summary" />
-      <div className="mb-5 grid grid-cols-1 gap-3 sm:grid-cols-3">
-        <PlainStat label="Overall average" value="85%" />
-        <PlainStat label="Class rank" value="7 / 36" />
-        <PlainStat label="Overall grade" value="A" valueClass="text-emerald-600" />
-      </div>
+      <SectionHeader
+        title="Grade Card"
+        subtitle={card?.examName ?? 'Term assessment summary'}
+      />
 
-      <div className="space-y-3 md:hidden">
-        {GRADE_ROWS.map((row) => (
-          <Card key={row.subject} className="p-4">
-            <div className="flex items-start justify-between gap-2">
-              <p className="font-semibold text-gray-900">{row.subject}</p>
-              <Badge tone={gradeTone(row.grade)}>{row.grade}</Badge>
-            </div>
-            <dl className="mt-3 space-y-2 text-sm">
-              <div className="flex justify-between gap-3">
-                <dt className="text-gray-400">Mid-term</dt>
-                <dd className="text-gray-700">{row.mid}</dd>
-              </div>
-              <div className="flex justify-between gap-3">
-                <dt className="text-gray-400">Term score</dt>
-                <dd className="font-medium text-gray-900">{row.term}</dd>
-              </div>
-            </dl>
-          </Card>
-        ))}
-      </div>
+      {loading && <p className="text-sm text-gray-500">Loading grade card...</p>}
+      {error && <p className="mb-4 text-sm text-red-600">{error}</p>}
 
-      <div className="hidden md:block">
-        <TableShell columns={['Subject', 'Mid-term', 'Term score', 'Grade']}>
-          {GRADE_ROWS.map((row) => (
-            <tr key={row.subject} className="hover:bg-violet-50/40">
-              <td className="px-4 py-3 font-medium text-gray-900">{row.subject}</td>
-              <td className="px-4 py-3 text-gray-500">{row.mid}</td>
-              <td className="px-4 py-3 text-gray-500">{row.term}</td>
-              <td className="px-4 py-3">
-                <Badge tone={gradeTone(row.grade)}>{row.grade}</Badge>
-              </td>
-            </tr>
-          ))}
-        </TableShell>
-      </div>
+      {!loading && !error && card && (
+        <>
+          <div className="mb-5 grid grid-cols-1 gap-3 sm:grid-cols-3">
+            <PlainStat
+              label="Overall average"
+              value={
+                pending || card.percentage == null ? 'Pending' : `${card.percentage}%`
+              }
+            />
+            <PlainStat
+              label="Total score"
+              value={
+                pending || card.totalScore == null || card.totalMax == null
+                  ? 'Pending'
+                  : `${card.totalScore} / ${card.totalMax}`
+              }
+            />
+            <PlainStat
+              label="Overall grade"
+              value={pending || !card.overallLetter ? 'Pending' : card.overallLetter}
+              valueClass={
+                pending || !card.overallLetter ? 'text-amber-600' : 'text-emerald-600'
+              }
+            />
+          </div>
+
+          {pending && (
+            <Card className="mb-4 border border-amber-200 bg-amber-50 p-4">
+              <p className="text-sm font-medium text-amber-800">Marks pending</p>
+              <p className="mt-1 text-sm text-amber-700">
+                Your grade card will appear after all {card.subjectsExpected || 10} subjects are
+                marked ({card.subjectsMarked}/{card.subjectsExpected || 10} done).
+              </p>
+            </Card>
+          )}
+
+          {!card.subjectsExpected ? (
+            <Card className="p-6 text-center">
+              <p className="text-sm text-gray-500">
+                No subjects are configured for your grade card yet.
+              </p>
+            </Card>
+          ) : (
+            <>
+              <div className="space-y-3 md:hidden">
+                {card.subjects.map((row) => (
+                  <Card key={row.subject} className="p-4">
+                    <div className="flex items-start justify-between gap-2">
+                      <p className="font-semibold text-gray-900">
+                        {teachingSubjectLabel(row.subject)}
+                      </p>
+                      {pending || row.status === 'pending' ? (
+                        <Badge tone="amber">Pending</Badge>
+                      ) : (
+                        <Badge tone={gradeTone(row.gradeLetter || '—')}>
+                          {row.gradeLetter || '—'}
+                        </Badge>
+                      )}
+                    </div>
+                    <dl className="mt-3 space-y-2 text-sm">
+                      <div className="flex justify-between gap-3">
+                        <dt className="text-gray-400">Score</dt>
+                        <dd className="font-medium text-gray-900">
+                          {pending || row.status === 'pending' || row.score == null
+                            ? 'Pending'
+                            : `${row.score} / ${row.maxScore}`}
+                        </dd>
+                      </div>
+                    </dl>
+                  </Card>
+                ))}
+              </div>
+
+              <div className="hidden md:block">
+                <TableShell columns={['Subject', 'Score', 'Grade']}>
+                  {card.subjects.map((row) => (
+                    <tr key={row.subject} className="hover:bg-violet-50/40">
+                      <td className="px-4 py-3 font-medium text-gray-900">
+                        {teachingSubjectLabel(row.subject)}
+                      </td>
+                      <td className="px-4 py-3 text-gray-500">
+                        {pending || row.status === 'pending' || row.score == null
+                          ? 'Pending'
+                          : `${row.score} / ${row.maxScore}`}
+                      </td>
+                      <td className="px-4 py-3">
+                        {pending || row.status === 'pending' ? (
+                          <Badge tone="amber">Pending</Badge>
+                        ) : (
+                          <Badge tone={gradeTone(row.gradeLetter || '—')}>
+                            {row.gradeLetter || '—'}
+                          </Badge>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </TableShell>
+              </div>
+            </>
+          )}
+        </>
+      )}
     </>
   );
 }
@@ -1287,7 +1537,12 @@ export default function StudentPortal() {
 
   const firstName = user?.firstName ?? STUDENT.firstName;
   const displayName = user ? `${user.firstName} ${user.lastName}` : STUDENT.name;
-  const classLabel = user?.studentProfile?.schoolClass?.name ?? STUDENT.className;
+  const classLabel = (() => {
+    const schoolClass = user?.studentProfile?.schoolClass;
+    if (!schoolClass?.name) return STUDENT.className;
+    const section = schoolClass.section?.trim();
+    return section ? `${schoolClass.name} - ${section}` : schoolClass.name;
+  })();
 
   return (
     <div className="min-h-dvh bg-gradient-to-b from-violet-50/60 to-white font-sans text-gray-900">

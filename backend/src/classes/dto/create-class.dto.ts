@@ -5,11 +5,7 @@ export class CreateClassDto {
   name: string;
 
   @IsString()
-  gradeLevel: string;
-
-  @IsOptional()
-  @IsString()
-  section?: string;
+  section: string;
 
   @IsOptional()
   @IsString()

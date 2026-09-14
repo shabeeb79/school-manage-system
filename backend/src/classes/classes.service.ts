@@ -14,6 +14,11 @@ export class ClassesService {
     return this.prisma.schoolClass.findMany({
       include: {
         _count: { select: { students: true, staff: true } },
+        staff: {
+          include: {
+            user: { select: { firstName: true, lastName: true } },
+          },
+        },
       },
       orderBy: { name: 'asc' },
     });
