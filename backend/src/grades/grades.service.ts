@@ -8,6 +8,7 @@ import { TeachingSubject, UserRole } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateGradeDto } from './dto/create-grade.dto';
 import { UpsertStaffMarkDto } from './dto/upsert-staff-mark.dto';
+import { assignedClassIdsFromStaff } from '../users/staff-classes';
 
 export const TERM_ASSESSMENT = 'Term Assessment';
 export const DEFAULT_MAX_SCORE = 100;
@@ -170,22 +171,38 @@ export class GradesService {
     return this.expectedSubjects();
   }
 
-  async staffClassMarks(staffUserId: string) {
+  async staffClassMarks(staffUserId: string, schoolClassId?: string) {
     const staff = await this.prisma.staffProfile.findUnique({
       where: { userId: staffUserId },
-      include: { assignedClass: true },
+      include: {
+        assignedClass: true,
+        classAssignments: {
+          include: { schoolClass: true },
+          orderBy: { createdAt: 'asc' },
+        },
+      },
     });
-    if (!staff?.assignedClassId || !staff.subject) {
+    const classIds = staff ? assignedClassIdsFromStaff(staff) : [];
+    if (!classIds.length || !staff?.subject) {
       throw new BadRequestException(
-        'Assign a class and subject to this teacher before entering grades',
+        'Assign at least one class and a subject to this teacher before entering grades',
       );
     }
 
-    const expectedSubjects = await this.expectedSubjectsForClass(
-      staff.assignedClassId,
-    );
+    const targetClassId = schoolClassId ?? classIds[0];
+    if (!classIds.includes(targetClassId)) {
+      throw new ForbiddenException('You are not assigned to this class');
+    }
+
+    const schoolClass =
+      staff.classAssignments.find((a) => a.schoolClassId === targetClassId)
+        ?.schoolClass ??
+      (staff.assignedClassId === targetClassId ? staff.assignedClass : null) ??
+      (await this.prisma.schoolClass.findUnique({ where: { id: targetClassId } }));
+
+    const expectedSubjects = await this.expectedSubjectsForClass(targetClassId);
     const students = await this.prisma.studentProfile.findMany({
-      where: { schoolClassId: staff.assignedClassId },
+      where: { schoolClassId: targetClassId },
       include: {
         user: {
           select: {
@@ -222,15 +239,25 @@ export class GradesService {
       examName: TERM_ASSESSMENT,
       maxScore: DEFAULT_MAX_SCORE,
       expectedSubjects,
-      schoolClass: staff.assignedClass
+      assignedClasses: classIds.map((id) => {
+        const cls =
+          staff.classAssignments.find((a) => a.schoolClassId === id)
+            ?.schoolClass ?? null;
+        return cls
+          ? {
+              id: cls.id,
+              name: cls.name,
+              section: cls.section,
+              label: formatClassLabel(cls.name, cls.section),
+            }
+          : { id, name: id, section: null, label: id };
+      }),
+      schoolClass: schoolClass
         ? {
-            id: staff.assignedClass.id,
-            name: staff.assignedClass.name,
-            section: staff.assignedClass.section,
-            label: formatClassLabel(
-              staff.assignedClass.name,
-              staff.assignedClass.section,
-            ),
+            id: schoolClass.id,
+            name: schoolClass.name,
+            section: schoolClass.section,
+            label: formatClassLabel(schoolClass.name, schoolClass.section),
           }
         : null,
       students: students.map((profile) => {
@@ -285,10 +312,12 @@ export class GradesService {
   async upsertStaffMark(staffUserId: string, dto: UpsertStaffMarkDto) {
     const staff = await this.prisma.staffProfile.findUnique({
       where: { userId: staffUserId },
+      include: { classAssignments: { select: { schoolClassId: true } } },
     });
-    if (!staff?.assignedClassId || !staff.subject) {
+    const classIds = staff ? assignedClassIdsFromStaff(staff) : [];
+    if (!classIds.length || !staff?.subject) {
       throw new BadRequestException(
-        'Assign a class and subject to this teacher before entering grades',
+        'Assign at least one class and a subject to this teacher before entering grades',
       );
     }
 
@@ -299,9 +328,12 @@ export class GradesService {
     if (!student?.studentProfile) {
       throw new NotFoundException('Student not found');
     }
-    if (student.studentProfile.schoolClassId !== staff.assignedClassId) {
+    if (
+      !student.studentProfile.schoolClassId ||
+      !classIds.includes(student.studentProfile.schoolClassId)
+    ) {
       throw new ForbiddenException(
-        'You can only enter marks for students in your assigned class',
+        'You can only enter marks for students in your assigned classes',
       );
     }
 

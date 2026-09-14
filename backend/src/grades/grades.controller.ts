@@ -48,8 +48,11 @@ export class GradesController {
 
   @Get('my-class')
   @Roles(UserRole.STAFF)
-  myClass(@CurrentUser() user: { id: string }) {
-    return this.grades.staffClassMarks(user.id);
+  myClass(
+    @CurrentUser() user: { id: string },
+    @Query('schoolClassId') schoolClassId?: string,
+  ) {
+    return this.grades.staffClassMarks(user.id, schoolClassId);
   }
 
   @Get('toppers')

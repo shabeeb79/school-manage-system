@@ -58,7 +58,10 @@ export class PostsService {
     id: string;
     role: UserRole;
     studentProfile?: { schoolClassId?: string | null } | null;
-    staffProfile?: { assignedClassId?: string | null } | null;
+    staffProfile?: {
+      assignedClassId?: string | null;
+      classAssignments?: { schoolClassId: string }[];
+    } | null;
   }) {
     const posts = await this.prisma.post.findMany({
       where: { isPublished: true },
@@ -68,36 +71,104 @@ export class PostsService {
         },
         targetClass: true,
         targets: true,
+        reads: {
+          where: { userId: user.id },
+          select: { id: true },
+        },
       },
       orderBy: { createdAt: 'desc' },
     });
 
-    return posts.filter((post) => {
-      switch (post.audience) {
-        case PostAudience.ALL:
+    return posts
+      .filter((post) => this.isVisibleTo(post, user))
+      .map(({ reads, ...post }) => ({
+        ...post,
+        isUnread: post.authorId !== user.id && reads.length === 0,
+      }));
+  }
+
+  private isVisibleTo(
+    post: {
+      audience: PostAudience;
+      targetClassId: string | null;
+      authorId: string;
+      targets: { userId: string }[];
+    },
+    user: {
+      id: string;
+      role: UserRole;
+      studentProfile?: { schoolClassId?: string | null } | null;
+      staffProfile?: {
+        assignedClassId?: string | null;
+        classAssignments?: { schoolClassId: string }[];
+      } | null;
+    },
+  ) {
+    switch (post.audience) {
+      case PostAudience.ALL:
+        return true;
+      case PostAudience.ADMIN:
+        return user.role === UserRole.ADMIN;
+      case PostAudience.STAFF:
+        return user.role === UserRole.STAFF || user.role === UserRole.ADMIN;
+      case PostAudience.STUDENT:
+        return user.role === UserRole.STUDENT || user.role === UserRole.ADMIN;
+      case PostAudience.CLASS: {
+        if (user.role === UserRole.ADMIN) return true;
+        if (user.studentProfile?.schoolClassId === post.targetClassId) {
           return true;
-        case PostAudience.ADMIN:
-          return user.role === UserRole.ADMIN;
-        case PostAudience.STAFF:
-          return user.role === UserRole.STAFF || user.role === UserRole.ADMIN;
-        case PostAudience.STUDENT:
-          return user.role === UserRole.STUDENT || user.role === UserRole.ADMIN;
-        case PostAudience.CLASS:
-          return (
-            user.role === UserRole.ADMIN ||
-            user.studentProfile?.schoolClassId === post.targetClassId ||
-            user.staffProfile?.assignedClassId === post.targetClassId
-          );
-        case PostAudience.CUSTOM:
-          return (
-            user.role === UserRole.ADMIN ||
-            post.authorId === user.id ||
-            post.targets.some((t) => t.userId === user.id)
-          );
-        default:
-          return false;
+        }
+        const staffClassIds = [
+          user.staffProfile?.assignedClassId,
+          ...(user.staffProfile?.classAssignments ?? []).map(
+            (a) => a.schoolClassId,
+          ),
+        ].filter(Boolean);
+        return staffClassIds.includes(post.targetClassId ?? undefined);
       }
+      case PostAudience.CUSTOM:
+        return (
+          user.role === UserRole.ADMIN ||
+          post.authorId === user.id ||
+          post.targets.some((t) => t.userId === user.id)
+        );
+      default:
+        return false;
+    }
+  }
+
+  async unreadCount(user: {
+    id: string;
+    role: UserRole;
+    studentProfile?: { schoolClassId?: string | null } | null;
+    staffProfile?: {
+      assignedClassId?: string | null;
+      classAssignments?: { schoolClassId: string }[];
+    } | null;
+  }) {
+    const feed = await this.feed(user);
+    return { count: feed.filter((post) => post.isUnread).length };
+  }
+
+  async markFeedRead(user: {
+    id: string;
+    role: UserRole;
+    studentProfile?: { schoolClassId?: string | null } | null;
+    staffProfile?: {
+      assignedClassId?: string | null;
+      classAssignments?: { schoolClassId: string }[];
+    } | null;
+  }) {
+    const feed = await this.feed(user);
+    const unreadIds = feed.filter((post) => post.isUnread).map((post) => post.id);
+    if (!unreadIds.length) return { marked: 0 };
+
+    await this.prisma.postRead.createMany({
+      data: unreadIds.map((postId) => ({ postId, userId: user.id })),
+      skipDuplicates: true,
     });
+
+    return { marked: unreadIds.length };
   }
 
   findAll() {

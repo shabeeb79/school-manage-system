@@ -14,17 +14,17 @@ import {
   Megaphone,
   Menu,
   MessageSquare,
-  Paperclip,
   Pencil,
   Plus,
   Search,
-  Send,
   Users,
   X,
 } from 'lucide-react';
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
 import { useAuth } from './auth/AuthContext';
 import api from './api/client';
+import MessagesChat from './components/MessagesChat';
+import NotificationBell from './components/NotificationBell';
 import {
   apiErrorMessage,
   formatLeaveApplied,
@@ -35,7 +35,20 @@ import {
   type ApiLeave,
 } from './lib/leave';
 import { mediaUrl } from './lib/media';
+import { startPortalNotifications } from './lib/notifications';
 import { teachingSubjectLabel } from './lib/subjects';
+import {
+  isStaffClassTeacher,
+  staffAssignedClassIds,
+  staffAssignedClasses,
+  staffClassTeacherClass,
+} from './lib/staffClasses';
+import {
+  emitUnreadChanged,
+  formatUnreadBadge,
+  markAnnouncementsRead,
+  type UnreadCounts,
+} from './lib/unread';
 import {
   Avatar,
   Badge,
@@ -111,6 +124,7 @@ type FeedPost = {
   createdAt: string;
   fileUrl?: string | null;
   mediaType?: string | null;
+  isUnread?: boolean;
   author?: { firstName?: string; lastName?: string } | null;
   targetClass?: { name?: string } | null;
 };
@@ -132,93 +146,6 @@ function announcementTone(audience: string): BadgeTone {
   if (audience === 'STUDENT') return 'green';
   return 'amber';
 }
-
-type ChatMessage = { id: string; from: 'in' | 'out'; text: string; time: string };
-type Thread = {
-  id: string;
-  name: string;
-  context: string;
-  preview: string;
-  time: string;
-  unread: boolean;
-  messages: ChatMessage[];
-};
-
-const INITIAL_THREADS: Thread[] = [
-  {
-    id: 't1',
-    name: 'Meera Krishnan',
-    context: 'Parent · Rahul Varma · Grade 9 - A',
-    preview: 'Thank you, I’ll remind him tonight.',
-    time: '10:41 AM',
-    unread: true,
-    messages: [
-      {
-        id: 'm1',
-        from: 'in',
-        text: 'Good morning. Rahul mentioned he is unsure about the letter format for Monday’s assignment.',
-        time: '10:12 AM',
-      },
-      {
-        id: 'm2',
-        from: 'out',
-        text: 'He can follow the sample on page 42. I’ll also recap the format in class today.',
-        time: '10:28 AM',
-      },
-      { id: 'm3', from: 'in', text: 'Thank you, I’ll remind him tonight.', time: '10:41 AM' },
-    ],
-  },
-  {
-    id: 't2',
-    name: 'Divya Menon',
-    context: 'Administrator',
-    preview: 'Please share Grade 9 PTM talking points by Thursday.',
-    time: '9:05 AM',
-    unread: true,
-    messages: [
-      {
-        id: 'm4',
-        from: 'in',
-        text: 'Please share Grade 9 PTM talking points by Thursday. Keep it to two slides.',
-        time: '9:05 AM',
-      },
-    ],
-  },
-  {
-    id: 't3',
-    name: 'Suresh Pillai',
-    context: 'Science · Grade 9 - A',
-    preview: 'Can we swap the Thursday lab with your English slot?',
-    time: 'Yesterday',
-    unread: false,
-    messages: [
-      {
-        id: 'm5',
-        from: 'in',
-        text: 'Can we swap the Thursday lab with your English slot? The chemicals only arrive in the morning.',
-        time: 'Yesterday',
-      },
-      { id: 'm6', from: 'out', text: 'Yes — I’ll take 9-A in the afternoon period.', time: 'Yesterday' },
-    ],
-  },
-  {
-    id: 't4',
-    name: 'Aisha Ali',
-    context: 'Parent · Farhan Ali · Grade 8 - B',
-    preview: 'Farhan has extra reading support this week.',
-    time: 'Mon',
-    unread: false,
-    messages: [
-      {
-        id: 'm7',
-        from: 'out',
-        text: 'Farhan has extra reading support this week. A short passage each evening will help.',
-        time: 'Mon',
-      },
-      { id: 'm8', from: 'in', text: 'We’ll do that. Thank you, Kavya.', time: 'Mon' },
-    ],
-  },
-];
 
 const MARK_OPTIONS: { id: Mark; label: string; active: string; hover: string }[] = [
   { id: 'P', label: 'P', active: 'border-green-600 bg-green-50 text-green-700', hover: 'hover:border-green-300 hover:text-green-700' },
@@ -290,22 +217,24 @@ function DashboardPage({
     (async () => {
       try {
         const today = todayInputValue();
-        const [studentsRes, attendanceRes] = await Promise.all([
+        const [rosterRes, classRes, attendanceRes] = await Promise.all([
           api.get('/users/my-students'),
+          api.get('/users/my-class-students'),
           api.get('/attendance', { params: { date: today } }),
         ]);
         if (!active) return;
-        const students = studentsRes.data as unknown[];
+        const roster = rosterRes.data as unknown[];
+        const classStudents = classRes.data as unknown[];
         const records = attendanceRes.data as Array<{ status: string }>;
-        setStudentCount(String(students.length));
-        if (!students.length) {
-          setAttendanceValue('0 / 0');
-          setAttendanceSub('No students in class');
+        setStudentCount(String(roster.length));
+        if (!classStudents.length) {
+          setAttendanceValue('—');
+          setAttendanceSub('Class teacher attendance only');
           return;
         }
-        setAttendanceValue(`${records.length} / ${students.length}`);
+        setAttendanceValue(`${records.length} / ${classStudents.length}`);
         setAttendanceSub(
-          records.length === students.length
+          records.length === classStudents.length
             ? 'Today complete'
             : 'Mark remaining students today',
         );
@@ -329,7 +258,7 @@ function DashboardPage({
       />
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4 lg:gap-4">
         <StatCard label="Classes today" value="4" subtext="3 remaining after this period" icon={<BookOpen className="h-4 w-4" />} />
-        <StatCard label="Total students" value={studentCount} subtext="In your assigned class" icon={<Users className="h-4 w-4" />} />
+        <StatCard label="Total students" value={studentCount} subtext="In your teaching roster" icon={<Users className="h-4 w-4" />} />
         <StatCard label="Pending grading" value="18" subtext="4 assignments open" icon={<GraduationCap className="h-4 w-4" />} />
         <StatCard label="Attendance marked" value={attendanceValue} subtext={attendanceSub} icon={<ClipboardCheck className="h-4 w-4" />} />
       </div>
@@ -390,6 +319,12 @@ function DashboardPage({
   );
 }
 
+type ApiClass = {
+  id: string;
+  name: string;
+  section?: string | null;
+};
+
 type ApiStudent = {
   id: string;
   userId: string;
@@ -417,6 +352,7 @@ type StudentFormState = {
   parentName: string;
   parentPhone: string;
   address: string;
+  schoolClassId: string;
 };
 
 const EMPTY_STUDENT_FORM: StudentFormState = {
@@ -428,15 +364,23 @@ const EMPTY_STUDENT_FORM: StudentFormState = {
   parentName: '',
   parentPhone: '',
   address: '',
+  schoolClassId: '',
 };
 
 function studentFullName(student: ApiStudent) {
   return `${student.user?.firstName ?? ''} ${student.user?.lastName ?? ''}`.trim() || 'Student';
 }
 
+function formatClassLabel(schoolClass?: { name: string; section?: string | null } | null) {
+  if (!schoolClass?.name) return '—';
+  const section = schoolClass.section?.trim();
+  return section ? `${schoolClass.name}-${section}` : schoolClass.name;
+}
+
 function StudentFormModal({
   mode,
   form,
+  classes,
   busy,
   error,
   onChange,
@@ -445,6 +389,7 @@ function StudentFormModal({
 }: {
   mode: 'add' | 'edit';
   form: StudentFormState;
+  classes: ApiClass[];
   busy: boolean;
   error: string;
   onChange: (next: StudentFormState) => void;
@@ -482,8 +427,8 @@ function StudentFormModal({
           </h2>
           <p className="mt-1 hidden text-sm text-gray-500 sm:block">
             {mode === 'add'
-              ? 'Creates a student account in your assigned class.'
-              : 'Update student details for your class.'}
+              ? 'Creates a student account. Choose the class for this student.'
+              : 'Update student details.'}
           </p>
         </div>
         <IconButton label="Close" onClick={onClose} className="shrink-0">
@@ -502,6 +447,24 @@ function StudentFormModal({
             <div className="sm:col-span-2">
               {field('Student / Roll ID', 'studentId', { required: true, placeholder: '9A-12' })}
             </div>
+            <label className="block text-sm text-gray-700 sm:col-span-2">
+              Class
+              <select
+                required
+                value={form.schoolClassId}
+                onChange={(event) =>
+                  onChange({ ...form, schoolClassId: event.target.value })
+                }
+                className="mt-1.5 h-10 w-full rounded-lg border border-gray-200 bg-white px-3 text-sm text-gray-900 focus:border-blue-600 focus:outline-none focus:ring-1 focus:ring-blue-600"
+              >
+                <option value="">Select class</option>
+                {classes.map((item) => (
+                  <option key={item.id} value={item.id}>
+                    {formatClassLabel(item)}
+                  </option>
+                ))}
+              </select>
+            </label>
           </div>
         )}
         <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 sm:gap-3">
@@ -532,8 +495,11 @@ function StudentFormModal({
 }
 
 function StudentsPage() {
+  const { user } = useAuth();
   const [query, setQuery] = useState('');
+  const [classFilter, setClassFilter] = useState('all');
   const [students, setStudents] = useState<ApiStudent[]>([]);
+  const [classes, setClasses] = useState<ApiClass[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
   const [modal, setModal] = useState<'add' | 'edit' | null>(null);
@@ -542,11 +508,26 @@ function StudentsPage() {
   const [busy, setBusy] = useState(false);
   const [formError, setFormError] = useState('');
 
+  const assignedClasses = staffAssignedClasses(user?.staffProfile);
+  const assignedClassIds = assignedClasses.map((c) => c.id);
+  const primaryClassId = assignedClassIds[0] ?? '';
+  const assignedClassesLabel =
+    assignedClasses.length > 0
+      ? assignedClasses.map((c) => formatClassLabel(c)).join(', ')
+      : '—';
+
   const load = async () => {
     setLoadError('');
     try {
-      const { data } = await api.get('/users/my-students');
-      setStudents(data);
+      const studentsRes = await api.get('/users/my-students');
+      setStudents(studentsRes.data);
+      setClasses(
+        assignedClasses.map((c) => ({
+          id: c.id,
+          name: c.name,
+          section: c.section ?? '',
+        })),
+      );
     } catch {
       setLoadError('Could not load students. Check that you are signed in as staff.');
     } finally {
@@ -556,22 +537,33 @@ function StudentsPage() {
 
   useEffect(() => {
     load().catch(console.error);
-  }, []);
+  }, [assignedClassIds.join(',')]);
 
   const filtered = students.filter((student) => {
+    if (classFilter !== 'all' && student.schoolClassId !== classFilter) {
+      return false;
+    }
     const name = studentFullName(student).toLowerCase();
     const roll = (student.studentId || '').toLowerCase();
     const email = (student.user?.email || '').toLowerCase();
+    const classLabel = formatClassLabel(student.schoolClass).toLowerCase();
     const q = query.toLowerCase();
-    return !q || name.includes(q) || roll.includes(q) || email.includes(q);
+    return (
+      !q ||
+      name.includes(q) ||
+      roll.includes(q) ||
+      email.includes(q) ||
+      classLabel.includes(q)
+    );
   });
-
-  const className = students[0]?.schoolClass?.name;
 
   const openAdd = () => {
     setModal('add');
     setEditingUserId(null);
-    setForm(EMPTY_STUDENT_FORM);
+    setForm({
+      ...EMPTY_STUDENT_FORM,
+      schoolClassId: primaryClassId || '',
+    });
     setFormError('');
   };
 
@@ -587,6 +579,7 @@ function StudentsPage() {
       parentName: student.parentName ?? '',
       parentPhone: student.parentPhone ?? '',
       address: student.address ?? '',
+      schoolClassId: student.schoolClassId ?? '',
     });
     setFormError('');
   };
@@ -604,12 +597,18 @@ function StudentsPage() {
     setFormError('');
     try {
       if (modal === 'add') {
+        if (!form.schoolClassId) {
+          setFormError('Please select a class');
+          setBusy(false);
+          return;
+        }
         await api.post('/users/students', {
           firstName: form.firstName,
           lastName: form.lastName,
           email: form.email,
           password: form.password,
           studentId: form.studentId,
+          schoolClassId: form.schoolClassId,
           parentName: form.parentName || undefined,
           parentPhone: form.parentPhone || undefined,
           address: form.address || undefined,
@@ -646,19 +645,23 @@ function StudentsPage() {
       <SectionHeader
         title="My Students"
         subtitle={
-          className
-            ? `Students in your assigned class · ${className}`
-            : 'Students in your assigned class'
+          assignedClassesLabel !== '—'
+            ? `Students in your assigned classes · ${assignedClassesLabel}`
+            : 'No classes assigned yet — ask admin to assign classes'
         }
         action={
-          <PrimaryButton icon={<Plus className="h-4 w-4" />} onClick={openAdd}>
+          <PrimaryButton
+            icon={<Plus className="h-4 w-4" />}
+            onClick={openAdd}
+            disabled={!assignedClassIds.length}
+          >
             Add student
           </PrimaryButton>
         }
       />
 
-      <div className="mb-4">
-        <div className="relative">
+      <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-center">
+        <div className="relative min-w-0 flex-1">
           <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
           <input
             value={query}
@@ -667,6 +670,19 @@ function StudentsPage() {
             className="h-10 w-full rounded-lg border border-gray-200 bg-white py-2 pl-9 pr-3 text-sm text-gray-900 placeholder:text-gray-400 focus:border-blue-600 focus:outline-none focus:ring-1 focus:ring-blue-600"
           />
         </div>
+        <select
+          value={classFilter}
+          onChange={(event) => setClassFilter(event.target.value)}
+          aria-label="Filter by class"
+          className="h-10 w-full rounded-lg border border-gray-200 bg-white px-3 text-sm text-gray-900 focus:border-blue-600 focus:outline-none focus:ring-1 focus:ring-blue-600 sm:w-44"
+        >
+          <option value="all">All assigned</option>
+          {assignedClasses.map((item) => (
+            <option key={item.id} value={item.id}>
+              {formatClassLabel(item)}
+            </option>
+          ))}
+        </select>
       </div>
 
       {loading && <p className="text-sm text-gray-500">Loading students...</p>}
@@ -693,7 +709,7 @@ function StudentsPage() {
                   </div>
                   <div className="flex justify-between gap-3">
                     <dt className="text-gray-400">Class</dt>
-                    <dd className="text-gray-700">{student.schoolClass?.name ?? '—'}</dd>
+                    <dd className="text-gray-700">{formatClassLabel(student.schoolClass)}</dd>
                   </div>
                   <div className="flex justify-between gap-3">
                     <dt className="text-gray-400">Parent</dt>
@@ -724,7 +740,7 @@ function StudentsPage() {
                     <PersonCell name={studentFullName(student)} sub={student.user?.email} />
                   </td>
                   <td className="px-4 py-3 text-gray-500">{student.studentId}</td>
-                  <td className="px-4 py-3 text-gray-500">{student.schoolClass?.name ?? '—'}</td>
+                  <td className="px-4 py-3 text-gray-500">{formatClassLabel(student.schoolClass)}</td>
                   <td className="px-4 py-3 text-gray-500">{student.parentName || '—'}</td>
                   <td className="px-4 py-3 text-gray-500">{student.parentPhone || '—'}</td>
                   <td className="px-4 py-3">
@@ -758,6 +774,7 @@ function StudentsPage() {
         <StudentFormModal
           mode={modal}
           form={form}
+          classes={classes}
           busy={busy}
           error={formError}
           onChange={setForm}
@@ -802,6 +819,8 @@ function studentUserId(student: ApiStudent) {
 
 function AttendancePage() {
   const { user } = useAuth();
+  const classTeacher = staffClassTeacherClass(user?.staffProfile);
+  const assignedClassId = classTeacher?.id;
   const [date, setDate] = useState(todayInputValue);
   const [students, setStudents] = useState<ApiStudent[]>([]);
   const [marks, setMarks] = useState<Record<string, Mark>>({});
@@ -811,19 +830,23 @@ function AttendancePage() {
   const [saved, setSaved] = useState(false);
   const [savedCount, setSavedCount] = useState(0);
 
-  const classLabel = (() => {
-    const schoolClass = students[0]?.schoolClass;
-    if (!schoolClass?.name) return 'Your class';
-    const section = schoolClass.section?.trim();
-    return section ? `${schoolClass.name} - ${section}` : schoolClass.name;
-  })();
+  const classLabel = formatClassLabel(
+    classTeacher ?? students[0]?.schoolClass ?? null,
+  );
 
   const load = async () => {
     setError('');
     try {
+      if (!assignedClassId) {
+        setStudents([]);
+        setMarks({});
+        return;
+      }
       const [studentsRes, attendanceRes] = await Promise.all([
-        api.get('/users/my-students'),
-        api.get('/attendance', { params: { date } }),
+        api.get('/users/my-class-students'),
+        api.get('/attendance', {
+          params: { date, schoolClassId: assignedClassId },
+        }),
       ]);
       const list = (studentsRes.data as ApiStudent[]).filter((student) =>
         Boolean(studentUserId(student)),
@@ -853,7 +876,7 @@ function AttendancePage() {
     setLoading(true);
     setSaved(false);
     load().catch(console.error);
-  }, [date]);
+  }, [date, assignedClassId]);
 
   const setMark = (userId: string, mark: Mark) => {
     setSaved(false);
@@ -861,16 +884,11 @@ function AttendancePage() {
   };
 
   const save = async () => {
-    if (!students.length) return;
+    if (!students.length || !assignedClassId) return;
     setSaving(true);
     setError('');
     setSaved(false);
     try {
-      const schoolClassId =
-        user?.staffProfile?.assignedClassId ||
-        students[0]?.schoolClassId ||
-        students[0]?.schoolClass?.id ||
-        undefined;
       const entries = students
         .map((student) => {
           const id = studentUserId(student);
@@ -887,7 +905,7 @@ function AttendancePage() {
       }
       await api.post('/attendance', {
         date,
-        schoolClassId,
+        schoolClassId: assignedClassId,
         entries,
       });
       setSavedCount(entries.length);
@@ -904,28 +922,34 @@ function AttendancePage() {
     <>
       <SectionHeader
         title="Attendance"
-        subtitle={`${classLabel} · ${formatDayLabel(date)}`}
+        subtitle={
+          assignedClassId
+            ? `${classLabel} · ${formatDayLabel(date)}`
+            : 'Only class teachers can mark attendance'
+        }
         action={
-          <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-            <label className="block">
-              <span className="sr-only">Date</span>
-              <input
-                type="date"
-                value={date}
-                onChange={(event) => setDate(event.target.value)}
-                className="h-10 rounded-lg border border-gray-200 bg-white px-3 text-sm text-gray-700 focus:border-blue-600 focus:outline-none focus:ring-1 focus:ring-blue-600"
-              />
-            </label>
-            <PrimaryButton
-              icon={<Check className="h-4 w-4" />}
-              disabled={saving || loading || !students.length}
-              onClick={() => {
-                void save();
-              }}
-            >
-              {saving ? 'Saving...' : 'Save attendance'}
-            </PrimaryButton>
-          </div>
+          assignedClassId ? (
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+              <label className="block">
+                <span className="sr-only">Date</span>
+                <input
+                  type="date"
+                  value={date}
+                  onChange={(event) => setDate(event.target.value)}
+                  className="h-10 rounded-lg border border-gray-200 bg-white px-3 text-sm text-gray-700 focus:border-blue-600 focus:outline-none focus:ring-1 focus:ring-blue-600"
+                />
+              </label>
+              <PrimaryButton
+                icon={<Check className="h-4 w-4" />}
+                disabled={saving || loading || !students.length}
+                onClick={() => {
+                  void save();
+                }}
+              >
+                {saving ? 'Saving...' : 'Save attendance'}
+              </PrimaryButton>
+            </div>
+          ) : undefined
         }
       />
 
@@ -938,7 +962,15 @@ function AttendancePage() {
         </p>
       )}
 
-      {!loading && !error && (
+      {!loading && !assignedClassId && (
+        <Card className="p-6 text-center">
+          <p className="text-sm text-gray-500">
+            You are not assigned as a class teacher, so there is no attendance roster.
+          </p>
+        </Card>
+      )}
+
+      {!loading && !error && assignedClassId && (
         <>
           <div className="space-y-3 md:hidden">
             {students.map((student) => {
@@ -1005,11 +1037,15 @@ function AttendancePage() {
 
 function GradesPage() {
   const { user } = useAuth();
+  const assignedClasses = staffAssignedClasses(user?.staffProfile);
+  const assignedClassIds = assignedClasses.map((c) => c.id);
+  const [selectedClassId, setSelectedClassId] = useState(assignedClassIds[0] ?? '');
   const [data, setData] = useState<{
     subject: string;
     examName: string;
     maxScore: number;
     expectedSubjects: string[];
+    assignedClasses?: Array<{ id: string; name: string; section?: string | null; label: string }>;
     schoolClass: { id: string; name: string; section?: string | null; label: string } | null;
     students: Array<{
       userId: string;
@@ -1028,10 +1064,24 @@ function GradesPage() {
   const [savingId, setSavingId] = useState<string | null>(null);
   const [saveError, setSaveError] = useState('');
 
+  useEffect(() => {
+    if (!selectedClassId && assignedClassIds[0]) {
+      setSelectedClassId(assignedClassIds[0]);
+    } else if (selectedClassId && !assignedClassIds.includes(selectedClassId)) {
+      setSelectedClassId(assignedClassIds[0] ?? '');
+    }
+  }, [assignedClassIds.join(','), selectedClassId]);
+
   const load = async () => {
     setError('');
     try {
-      const { data: payload } = await api.get('/grades/my-class');
+      if (!selectedClassId) {
+        setData(null);
+        return;
+      }
+      const { data: payload } = await api.get('/grades/my-class', {
+        params: { schoolClassId: selectedClassId },
+      });
       setData(payload);
       const next: Record<string, string> = {};
       for (const student of payload.students as Array<{
@@ -1056,11 +1106,20 @@ function GradesPage() {
   };
 
   useEffect(() => {
+    setLoading(true);
     load().catch(console.error);
-  }, []);
+  }, [selectedClassId]);
 
   const subjectLabel = teachingSubjectLabel(data?.subject ?? user?.staffProfile?.subject);
   const classLabel = data?.schoolClass?.label ?? 'Your class';
+  const classOptions = data?.assignedClasses?.length
+    ? data.assignedClasses
+    : assignedClasses.map((c) => ({
+        id: c.id,
+        name: c.name,
+        section: c.section,
+        label: formatClassLabel(c),
+      }));
 
   const saveMark = async (studentUserId: string) => {
     const raw = scores[studentUserId]?.trim();
@@ -1094,6 +1153,22 @@ function GradesPage() {
       <SectionHeader
         title="Grades"
         subtitle={`${subjectLabel} marks · ${classLabel}`}
+        action={
+          classOptions.length > 1 ? (
+            <select
+              value={selectedClassId}
+              onChange={(event) => setSelectedClassId(event.target.value)}
+              aria-label="Class"
+              className="h-10 rounded-lg border border-gray-200 bg-white px-3 text-sm text-gray-700 focus:border-blue-600 focus:outline-none focus:ring-1 focus:ring-blue-600"
+            >
+              {classOptions.map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.label || formatClassLabel(item)}
+                </option>
+              ))}
+            </select>
+          ) : undefined
+        }
       />
 
       {loading && <p className="text-sm text-gray-500">Loading students...</p>}
@@ -1232,7 +1307,8 @@ type StaffAssignment = {
   subject: string;
   dueDate: string;
   maxScore: number | string;
-  schoolClass?: { id: string; name: string } | null;
+  schoolClassId?: string;
+  schoolClass?: { id: string; name: string; section?: string | null } | null;
   submissions?: AssignmentSubmission[];
   _count?: { submissions: number };
 };
@@ -1265,8 +1341,12 @@ function formatDue(date: string) {
 
 function AssignmentsPage() {
   const { user } = useAuth();
+  const assignedClasses = staffAssignedClasses(user?.staffProfile);
+  const primaryClassId = assignedClasses[0]?.id ?? '';
   const [assignments, setAssignments] = useState<StaffAssignment[]>([]);
-  const [classStudents, setClassStudents] = useState<ApiStudent[]>([]);
+  const [allStudents, setAllStudents] = useState<ApiStudent[]>([]);
+  const [classes, setClasses] = useState<ApiClass[]>([]);
+  const [classFilter, setClassFilter] = useState('all');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -1281,12 +1361,14 @@ function AssignmentsPage() {
   const [showCreate, setShowCreate] = useState(false);
   const [createBusy, setCreateBusy] = useState(false);
   const [createError, setCreateError] = useState('');
+  const defaultSubject = teachingSubjectLabel(user?.staffProfile?.subject) || 'Subject';
   const [createForm, setCreateForm] = useState({
     title: '',
     description: '',
-    subject: 'English',
+    subject: defaultSubject,
     dueDate: '',
     maxScore: '100',
+    schoolClassId: primaryClassId,
   });
 
   const load = async () => {
@@ -1297,7 +1379,14 @@ function AssignmentsPage() {
         api.get('/users/my-students'),
       ]);
       setAssignments(assignmentsRes.data);
-      setClassStudents(studentsRes.data);
+      setAllStudents(studentsRes.data);
+      setClasses(
+        assignedClasses.map((c) => ({
+          id: c.id,
+          name: c.name,
+          section: c.section ?? '',
+        })),
+      );
     } catch {
       setError('Could not load assignments.');
     } finally {
@@ -1307,9 +1396,22 @@ function AssignmentsPage() {
 
   useEffect(() => {
     load().catch(console.error);
-  }, []);
+  }, [assignedClasses.map((c) => c.id).join(',')]);
+
+  const filteredAssignments =
+    classFilter === 'all'
+      ? assignments
+      : assignments.filter(
+          (item) =>
+            (item.schoolClassId || item.schoolClass?.id) === classFilter,
+        );
 
   const selected = assignments.find((item) => item.id === selectedId) ?? null;
+  const assignmentClassId =
+    selected?.schoolClassId || selected?.schoolClass?.id || '';
+  const classStudents = allStudents.filter(
+    (student) => student.schoolClassId === assignmentClassId,
+  );
   const submissions = selected?.submissions ?? [];
   const submittedIds = new Set(submissions.map((item) => item.studentId));
   const pendingList = submissions.filter(
@@ -1329,6 +1431,19 @@ function AssignmentsPage() {
     setRemark('');
     setScore('');
     setReviewError('');
+  };
+
+  const openCreate = () => {
+    setCreateError('');
+    setCreateForm({
+      title: '',
+      description: '',
+      subject: defaultSubject,
+      dueDate: '',
+      maxScore: '100',
+      schoolClassId: primaryClassId,
+    });
+    setShowCreate(true);
   };
 
   const review = async (status: 'APPROVED' | 'REJECTED') => {
@@ -1366,9 +1481,8 @@ function AssignmentsPage() {
 
   const createAssignment = async (event: FormEvent) => {
     event.preventDefault();
-    const schoolClassId = user?.staffProfile?.assignedClassId;
-    if (!schoolClassId) {
-      setCreateError('No assigned class found for your staff account.');
+    if (!createForm.schoolClassId) {
+      setCreateError('Please select a class');
       return;
     }
     setCreateBusy(true);
@@ -1379,16 +1493,17 @@ function AssignmentsPage() {
         description: createForm.description,
         subject: createForm.subject,
         dueDate: createForm.dueDate,
-        schoolClassId,
+        schoolClassId: createForm.schoolClassId,
         maxScore: Number(createForm.maxScore) || 100,
       });
       setShowCreate(false);
       setCreateForm({
         title: '',
         description: '',
-        subject: 'English',
+        subject: defaultSubject,
         dueDate: '',
         maxScore: '100',
+        schoolClassId: primaryClassId,
       });
       await load();
     } catch (err: unknown) {
@@ -1587,7 +1702,7 @@ function AssignmentsPage() {
         </button>
         <SectionHeader
           title={selected.title}
-          subtitle={`${selected.subject} · Due ${formatDue(selected.dueDate)} · ${selected.schoolClass?.name ?? 'Class'}`}
+          subtitle={`${selected.subject} · ${formatClassLabel(selected.schoolClass)} · Due ${formatDue(selected.dueDate)}`}
         />
         <p className="mb-4 text-sm text-gray-500">{selected.description}</p>
         <div className="mb-4 flex gap-2 overflow-x-auto pb-1">
@@ -1691,9 +1806,13 @@ function AssignmentsPage() {
     <>
       <SectionHeader
         title="Assignments"
-        subtitle="Review photo and video submissions from your class"
+        subtitle="Create assignments for your assigned classes — only that class’s students can see them"
         action={
-          <PrimaryButton icon={<Plus className="h-4 w-4" />} onClick={() => setShowCreate(true)}>
+          <PrimaryButton
+            icon={<Plus className="h-4 w-4" />}
+            onClick={openCreate}
+            disabled={!assignedClasses.length}
+          >
             New assignment
           </PrimaryButton>
         }
@@ -1701,10 +1820,30 @@ function AssignmentsPage() {
       {loading && <p className="text-sm text-gray-500">Loading assignments...</p>}
       {error && <p className="mb-4 text-sm text-red-600">{error}</p>}
 
+      {!loading && assignedClasses.length > 1 && (
+        <div className="mb-4">
+          <select
+            value={classFilter}
+            onChange={(event) => setClassFilter(event.target.value)}
+            aria-label="Filter assignments by class"
+            className="h-10 w-full rounded-lg border border-gray-200 bg-white px-3 text-sm text-gray-900 focus:border-blue-600 focus:outline-none focus:ring-1 focus:ring-blue-600 sm:w-56"
+          >
+            <option value="all">All assigned classes</option>
+            {assignedClasses.map((item) => (
+              <option key={item.id} value={item.id}>
+                {formatClassLabel(item)}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
+
       <div className="space-y-3">
-        {assignments.map((item) => {
+        {filteredAssignments.map((item) => {
+          const classId = item.schoolClassId || item.schoolClass?.id;
+          const totalForClass = allStudents.filter((s) => s.schoolClassId === classId).length;
           const done = item._count?.submissions ?? item.submissions?.length ?? 0;
-          const total = classStudents.length || done;
+          const total = totalForClass || done;
           return (
             <button
               key={item.id}
@@ -1715,7 +1854,7 @@ function AssignmentsPage() {
               <div className="min-w-0 flex-1">
                 <h2 className="font-semibold text-gray-900">{item.title}</h2>
                 <p className="mt-1 text-sm text-gray-500">
-                  {item.subject} · {item.schoolClass?.name ?? 'Class'} · Due {formatDue(item.dueDate)}
+                  {item.subject} · {formatClassLabel(item.schoolClass)} · Due {formatDue(item.dueDate)}
                 </p>
               </div>
               <Badge tone={done >= total && total > 0 ? 'green' : 'blue'}>
@@ -1725,9 +1864,11 @@ function AssignmentsPage() {
             </button>
           );
         })}
-        {!loading && !assignments.length && (
+        {!loading && !filteredAssignments.length && (
           <Card className="p-6 text-center text-sm text-gray-500">
-            No assignments yet. Create one for your assigned class.
+            {assignments.length
+              ? 'No assignments for this class filter.'
+              : 'No assignments yet. Create one and choose the target class.'}
           </Card>
         )}
       </div>
@@ -1735,12 +1876,35 @@ function AssignmentsPage() {
       {showCreate && (
         <Modal onClose={() => setShowCreate(false)} size="md">
           <div className="mb-3 flex items-start justify-between sm:mb-4">
-            <h2 className="text-base font-semibold text-gray-900 sm:text-lg">New assignment</h2>
+            <div>
+              <h2 className="text-base font-semibold text-gray-900 sm:text-lg">New assignment</h2>
+              <p className="mt-1 text-sm text-gray-500">
+                Select a class. Only students in that class will see this assignment.
+              </p>
+            </div>
             <IconButton label="Close" onClick={() => setShowCreate(false)} className="shrink-0">
               <X className="h-4 w-4" />
             </IconButton>
           </div>
           <form onSubmit={createAssignment} className="space-y-2 sm:space-y-3">
+            <label className="block text-sm text-gray-700">
+              Class
+              <select
+                required
+                value={createForm.schoolClassId}
+                onChange={(e) =>
+                  setCreateForm({ ...createForm, schoolClassId: e.target.value })
+                }
+                className="mt-1.5 h-10 w-full rounded-lg border border-gray-200 bg-white px-3 text-sm focus:border-blue-600 focus:outline-none focus:ring-1 focus:ring-blue-600"
+              >
+                <option value="">Select class</option>
+                {classes.map((item) => (
+                  <option key={item.id} value={item.id}>
+                    {formatClassLabel(item)}
+                  </option>
+                ))}
+              </select>
+            </label>
             <label className="block text-sm text-gray-700">
               Title
               <input
@@ -1812,6 +1976,10 @@ function LeavePage() {
   const [formError, setFormError] = useState('');
   const [form, setForm] = useState({ reason: '', startDate: '', endDate: '' });
 
+  const isClassTeacher = isStaffClassTeacher(user?.staffProfile);
+  const classTeacher = staffClassTeacherClass(user?.staffProfile);
+  const classLabel = formatClassLabel(classTeacher);
+
   const load = async () => {
     setError('');
     try {
@@ -1829,7 +1997,9 @@ function LeavePage() {
   }, []);
 
   const myLeave = items.filter((item) => item.requesterId === user?.id);
-  const studentLeave = items.filter((item) => item.requester?.role === 'STUDENT');
+  const studentLeave = isClassTeacher
+    ? items.filter((item) => item.requester?.role === 'STUDENT')
+    : [];
   const pendingStudents = studentLeave.filter((item) => item.status === 'PENDING').length;
 
   const openModal = () => {
@@ -1874,7 +2044,11 @@ function LeavePage() {
     <>
       <SectionHeader
         title="Leave"
-        subtitle="Apply for your leave and review student requests from your class"
+        subtitle={
+          isClassTeacher
+            ? `Apply for your leave and review student requests from ${classLabel !== '—' ? classLabel : 'your class'}`
+            : 'Apply for your leave. Student leave is visible only to the class teacher.'
+        }
         action={
           <PrimaryButton icon={<Plus className="h-4 w-4" />} onClick={openModal}>
             Apply for leave
@@ -1909,96 +2083,106 @@ function LeavePage() {
       {!loading && (
         <>
           <h2 className="mb-3 text-base font-semibold text-gray-900">Student leave requests</h2>
-          <div className="mb-8 space-y-3 md:hidden">
-            {studentLeave.map((row) => (
-              <Card key={row.id} className="p-4">
-                <div className="flex items-start justify-between gap-2">
-                  <PersonCell
-                    name={leaveFullName(row)}
-                    sub={`Roll ${leaveRoll(row)}`}
-                  />
-                  <Badge tone={leaveTone(row.status)}>{leaveStatusLabel(row.status)}</Badge>
-                </div>
-                <dl className="mt-3 space-y-2 text-sm">
-                  <div className="flex justify-between gap-3">
-                    <dt className="text-gray-400">Dates</dt>
-                    <dd className="text-gray-700">{formatLeaveDates(row.startDate, row.endDate)}</dd>
-                  </div>
-                  <div className="flex justify-between gap-3">
-                    <dt className="text-gray-400">Reason</dt>
-                    <dd className="text-right text-gray-700">{row.reason}</dd>
-                  </div>
-                </dl>
-                {row.status === 'PENDING' && (
-                  <div className="mt-3 flex gap-2">
-                    <PrimaryButton
-                      className="flex-1"
-                      onClick={() => review(row.id, 'APPROVED')}
-                    >
-                      {reviewBusyId === row.id ? 'Saving...' : 'Approve'}
-                    </PrimaryButton>
-                    <button
-                      type="button"
-                      onClick={() => review(row.id, 'REJECTED')}
-                      className="inline-flex h-10 flex-1 items-center justify-center rounded-lg border border-red-200 px-4 text-sm font-medium text-red-600 hover:bg-red-50"
-                    >
-                      Reject
-                    </button>
-                  </div>
-                )}
-              </Card>
-            ))}
-            {!studentLeave.length && (
-              <Card className="p-6 text-center">
-                <p className="text-sm text-gray-500">No student leave requests for your class.</p>
-              </Card>
-            )}
-          </div>
-
-          <div className="mb-8 hidden md:block">
-            <TableShell columns={['Student', 'Roll no.', 'Dates', 'Reason', 'Status', '']}>
-              {studentLeave.map((row) => (
-                <tr key={row.id} className="hover:bg-gray-50">
-                  <td className="px-4 py-3">
-                    <PersonCell name={leaveFullName(row)} />
-                  </td>
-                  <td className="px-4 py-3 text-gray-500">{leaveRoll(row)}</td>
-                  <td className="px-4 py-3 text-gray-500">
-                    {formatLeaveDates(row.startDate, row.endDate)}
-                  </td>
-                  <td className="px-4 py-3 text-gray-500">{row.reason}</td>
-                  <td className="px-4 py-3">
-                    <Badge tone={leaveTone(row.status)}>{leaveStatusLabel(row.status)}</Badge>
-                  </td>
-                  <td className="px-2 py-3 text-right">
-                    {row.status === 'PENDING' ? (
-                      <div className="flex items-center justify-end gap-1">
-                        <IconButton
-                          label={`Approve leave for ${leaveFullName(row)}`}
-                          onClick={() => review(row.id, 'APPROVED')}
-                          className="text-green-600 hover:bg-green-50 hover:text-green-700"
-                        >
-                          <Check className="h-4 w-4" />
-                        </IconButton>
-                        <IconButton
-                          label={`Reject leave for ${leaveFullName(row)}`}
-                          onClick={() => review(row.id, 'REJECTED')}
-                          className="text-red-600 hover:bg-red-50 hover:text-red-700"
-                        >
-                          <X className="h-4 w-4" />
-                        </IconButton>
+          {!isClassTeacher ? (
+            <Card className="mb-8 p-6 text-center">
+              <p className="text-sm text-gray-500">
+                Only class teachers can review student leave for their assigned class.
+              </p>
+            </Card>
+          ) : (
+            <>
+              <div className="mb-8 space-y-3 md:hidden">
+                {studentLeave.map((row) => (
+                  <Card key={row.id} className="p-4">
+                    <div className="flex items-start justify-between gap-2">
+                      <PersonCell
+                        name={leaveFullName(row)}
+                        sub={`Roll ${leaveRoll(row)}`}
+                      />
+                      <Badge tone={leaveTone(row.status)}>{leaveStatusLabel(row.status)}</Badge>
+                    </div>
+                    <dl className="mt-3 space-y-2 text-sm">
+                      <div className="flex justify-between gap-3">
+                        <dt className="text-gray-400">Dates</dt>
+                        <dd className="text-gray-700">{formatLeaveDates(row.startDate, row.endDate)}</dd>
                       </div>
-                    ) : null}
-                  </td>
-                </tr>
-              ))}
-            </TableShell>
-            {!studentLeave.length && (
-              <Card className="mt-3 p-6 text-center">
-                <p className="text-sm text-gray-500">No student leave requests for your class.</p>
-              </Card>
-            )}
-          </div>
+                      <div className="flex justify-between gap-3">
+                        <dt className="text-gray-400">Reason</dt>
+                        <dd className="text-right text-gray-700">{row.reason}</dd>
+                      </div>
+                    </dl>
+                    {row.status === 'PENDING' && (
+                      <div className="mt-3 flex gap-2">
+                        <PrimaryButton
+                          className="flex-1"
+                          onClick={() => review(row.id, 'APPROVED')}
+                        >
+                          {reviewBusyId === row.id ? 'Saving...' : 'Approve'}
+                        </PrimaryButton>
+                        <button
+                          type="button"
+                          onClick={() => review(row.id, 'REJECTED')}
+                          className="inline-flex h-10 flex-1 items-center justify-center rounded-lg border border-red-200 px-4 text-sm font-medium text-red-600 hover:bg-red-50"
+                        >
+                          Reject
+                        </button>
+                      </div>
+                    )}
+                  </Card>
+                ))}
+                {!studentLeave.length && (
+                  <Card className="p-6 text-center">
+                    <p className="text-sm text-gray-500">No student leave requests for your class.</p>
+                  </Card>
+                )}
+              </div>
+
+              <div className="mb-8 hidden md:block">
+                <TableShell columns={['Student', 'Roll no.', 'Dates', 'Reason', 'Status', '']}>
+                  {studentLeave.map((row) => (
+                    <tr key={row.id} className="hover:bg-gray-50">
+                      <td className="px-4 py-3">
+                        <PersonCell name={leaveFullName(row)} />
+                      </td>
+                      <td className="px-4 py-3 text-gray-500">{leaveRoll(row)}</td>
+                      <td className="px-4 py-3 text-gray-500">
+                        {formatLeaveDates(row.startDate, row.endDate)}
+                      </td>
+                      <td className="px-4 py-3 text-gray-500">{row.reason}</td>
+                      <td className="px-4 py-3">
+                        <Badge tone={leaveTone(row.status)}>{leaveStatusLabel(row.status)}</Badge>
+                      </td>
+                      <td className="px-2 py-3 text-right">
+                        {row.status === 'PENDING' ? (
+                          <div className="flex items-center justify-end gap-1">
+                            <IconButton
+                              label={`Approve leave for ${leaveFullName(row)}`}
+                              onClick={() => review(row.id, 'APPROVED')}
+                              className="text-green-600 hover:bg-green-50 hover:text-green-700"
+                            >
+                              <Check className="h-4 w-4" />
+                            </IconButton>
+                            <IconButton
+                              label={`Reject leave for ${leaveFullName(row)}`}
+                              onClick={() => review(row.id, 'REJECTED')}
+                              className="text-red-600 hover:bg-red-50 hover:text-red-700"
+                            >
+                              <X className="h-4 w-4" />
+                            </IconButton>
+                          </div>
+                        ) : null}
+                      </td>
+                    </tr>
+                  ))}
+                </TableShell>
+                {!studentLeave.length && (
+                  <Card className="mt-3 p-6 text-center">
+                    <p className="text-sm text-gray-500">No student leave requests for your class.</p>
+                  </Card>
+                )}
+              </div>
+            </>
+          )}
 
           <h2 className="mb-3 text-base font-semibold text-gray-900">My leave</h2>
           <div className="space-y-3 md:hidden">
@@ -2118,153 +2302,17 @@ function LeavePage() {
   );
 }
 
-function MessagesPage() {
-  const [threads, setThreads] = useState(INITIAL_THREADS);
-  const [activeId, setActiveId] = useState(INITIAL_THREADS[0].id);
-  const [mobileShowChat, setMobileShowChat] = useState(false);
-  const [draft, setDraft] = useState('');
-  const [threadQuery, setThreadQuery] = useState('');
-
-  const active = threads.find((thread) => thread.id === activeId) ?? threads[0];
-  const visibleThreads = threads.filter((thread) =>
-    thread.name.toLowerCase().includes(threadQuery.toLowerCase()),
-  );
-
-  const openThread = (id: string) => {
-    setActiveId(id);
-    setMobileShowChat(true);
-    setThreads((current) =>
-      current.map((thread) => (thread.id === id ? { ...thread, unread: false } : thread)),
-    );
-  };
-
-  const sendMessage = () => {
-    const text = draft.trim();
-    if (!text) return;
-    const message: ChatMessage = { id: `out-${Date.now()}`, from: 'out', text, time: 'Just now' };
-    setThreads((current) =>
-      current.map((thread) =>
-        thread.id === active.id
-          ? { ...thread, preview: text, time: 'Just now', unread: false, messages: [...thread.messages, message] }
-          : thread,
-      ),
-    );
-    setDraft('');
-  };
-
+function MessagesPage({
+  onUnreadChange,
+}: {
+  onUnreadChange?: (count: number) => void;
+}) {
   return (
-    <>
-      <SectionHeader title="Messages" subtitle="Parents, staff, and school office" />
-      <Card className="flex h-[calc(100dvh-11.5rem)] overflow-hidden md:h-[480px]">
-        <div
-          className={cn(
-            'w-full shrink-0 flex-col border-gray-200 md:flex md:w-72 md:border-r',
-            mobileShowChat ? 'hidden md:flex' : 'flex',
-          )}
-        >
-          <div className="border-b border-gray-200 p-3">
-            <div className="relative">
-              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
-              <input
-                value={threadQuery}
-                onChange={(event) => setThreadQuery(event.target.value)}
-                placeholder="Search conversations"
-                className="h-10 w-full rounded-lg border border-gray-200 bg-gray-50 py-2 pl-9 pr-3 text-sm placeholder:text-gray-400 focus:border-blue-600 focus:bg-white focus:outline-none focus:ring-1 focus:ring-blue-600"
-              />
-            </div>
-          </div>
-          <ul className="flex-1 overflow-y-auto">
-            {visibleThreads.map((thread) => (
-              <li key={thread.id}>
-                <button
-                  type="button"
-                  onClick={() => openThread(thread.id)}
-                  className={cn(
-                    'flex w-full items-start gap-3 px-3 py-3 text-left hover:bg-gray-50',
-                    thread.id === active.id && 'bg-blue-50 hover:bg-blue-50',
-                  )}
-                >
-                  <Avatar name={thread.name} />
-                  <span className="min-w-0 flex-1">
-                    <span className="flex items-center justify-between gap-2">
-                      <span
-                        className={cn(
-                          'truncate text-sm',
-                          thread.unread ? 'font-bold text-gray-900' : 'font-medium text-gray-900',
-                        )}
-                      >
-                        {thread.name}
-                      </span>
-                      <span className="shrink-0 text-xs text-gray-400">{thread.time}</span>
-                    </span>
-                    <span
-                      className={cn(
-                        'mt-0.5 block truncate text-xs',
-                        thread.unread ? 'font-semibold text-gray-700' : 'text-gray-400',
-                      )}
-                    >
-                      {thread.preview}
-                    </span>
-                  </span>
-                </button>
-              </li>
-            ))}
-          </ul>
-        </div>
-
-        <div className={cn('min-w-0 flex-1 flex-col', mobileShowChat ? 'flex' : 'hidden md:flex')}>
-          <div className="flex items-center gap-2 border-b border-gray-200 px-3 py-3 md:px-4">
-            <IconButton label="Back to conversations" onClick={() => setMobileShowChat(false)} className="md:hidden">
-              <ChevronLeft className="h-5 w-5" />
-            </IconButton>
-            <Avatar name={active.name} />
-            <div className="min-w-0">
-              <p className="truncate font-semibold text-gray-900">{active.name}</p>
-              <p className="truncate text-xs text-gray-400">{active.context}</p>
-            </div>
-          </div>
-          <div className="flex-1 space-y-3 overflow-y-auto bg-gray-50 px-3 py-4 md:px-4">
-            {active.messages.map((message) => (
-              <div key={message.id} className={cn('flex', message.from === 'out' ? 'justify-end' : 'justify-start')}>
-                <div
-                  className={cn(
-                    'max-w-[80%] px-3 py-2 text-sm',
-                    message.from === 'out'
-                      ? 'rounded-2xl rounded-br-md bg-blue-600 text-white'
-                      : 'rounded-2xl rounded-bl-md border border-gray-200 bg-white text-gray-900',
-                  )}
-                >
-                  <p>{message.text}</p>
-                  <p className={cn('mt-1 text-[11px]', message.from === 'out' ? 'text-blue-100' : 'text-gray-400')}>
-                    {message.time}
-                  </p>
-                </div>
-              </div>
-            ))}
-          </div>
-          <form
-            className="flex items-center gap-1 border-t border-gray-200 p-2 md:gap-2 md:p-3"
-            onSubmit={(event) => {
-              event.preventDefault();
-              sendMessage();
-            }}
-          >
-            <IconButton label="Attach file">
-              <Paperclip className="h-4 w-4" />
-            </IconButton>
-            <input
-              value={draft}
-              onChange={(event) => setDraft(event.target.value)}
-              placeholder="Write a message"
-              className="h-10 min-w-0 flex-1 rounded-lg border border-gray-200 bg-white px-3 text-sm placeholder:text-gray-400 focus:border-blue-600 focus:outline-none focus:ring-1 focus:ring-blue-600"
-            />
-            <PrimaryButton type="submit" icon={<Send className="h-4 w-4" />}>
-              Send
-            </PrimaryButton>
-          </form>
-        </div>
-      </Card>
-    </>
+    <MessagesChat
+      subtitle="Parents, staff, and school office"
+      variant="staff"
+      onUnreadChange={onUnreadChange}
+    />
   );
 }
 
@@ -2280,6 +2328,8 @@ function AnnouncementsPage() {
       try {
         const { data } = await api.get('/posts/feed');
         if (active) setPosts(data);
+        await markAnnouncementsRead();
+        emitUnreadChanged();
       } catch {
         if (active) setError('Could not load announcements.');
       } finally {
@@ -2308,6 +2358,7 @@ function AnnouncementsPage() {
                     <Badge tone={announcementTone(item.audience)}>
                       {author || 'Announcement'}
                     </Badge>
+                    {item.isUnread && <Badge tone="red">New</Badge>}
                     <span className="text-xs text-gray-400">
                       {formatAnnouncementDate(item.createdAt)}
                     </span>
@@ -2339,20 +2390,42 @@ const PAGES = {
   grades: GradesPage,
   assignments: AssignmentsPage,
   leave: LeavePage,
-  messages: MessagesPage,
   announcements: AnnouncementsPage,
 };
 
-function StaffPage({ page }: { page: Exclude<PageId, 'dashboard'> }) {
+function StaffPage({
+  page,
+  onMessageUnreadChange,
+}: {
+  page: Exclude<PageId, 'dashboard'>;
+  onMessageUnreadChange?: (count: number) => void;
+}) {
+  if (page === 'messages') {
+    return <MessagesPage onUnreadChange={onMessageUnreadChange} />;
+  }
   const Page = PAGES[page];
   return <Page />;
+}
+
+function NavCount({ count }: { count: number }) {
+  const label = formatUnreadBadge(count);
+  if (!label) return null;
+  return (
+    <span className="ml-auto inline-flex min-w-[1.15rem] items-center justify-center rounded-full bg-rose-500 px-1.5 py-0.5 text-[10px] font-semibold leading-none text-white">
+      {label}
+    </span>
+  );
 }
 
 export default function StaffPortal() {
   const { user, logout } = useAuth();
   const [page, setPage] = useState<PageId>('dashboard');
   const [drawerOpen, setDrawerOpen] = useState(false);
-  const [searchExpanded, setSearchExpanded] = useState(false);
+  const [unread, setUnread] = useState<UnreadCounts>({
+    announcements: 0,
+    assignments: 0,
+    messages: 0,
+  });
 
   const displayName = user ? `${user.firstName} ${user.lastName}` : TEACHER.name;
   const displayRole =
@@ -2361,12 +2434,36 @@ export default function StaffPortal() {
       : user?.role === 'STAFF'
         ? 'Staff'
         : TEACHER.role;
+  const isClassTeacher = isStaffClassTeacher(user?.staffProfile);
+  const navItems = NAV_ITEMS.filter(
+    (item) => item.id !== 'attendance' || isClassTeacher,
+  );
 
   const goTo = (id: PageId) => {
     setPage(id);
     setDrawerOpen(false);
-    setSearchExpanded(false);
   };
+
+  useEffect(() => {
+    if (page === 'attendance' && !isClassTeacher) {
+      setPage('dashboard');
+    }
+  }, [page, isClassTeacher]);
+
+  useEffect(() => {
+    return startPortalNotifications({
+      includeAssignments: false,
+      onCounts: setUnread,
+    });
+  }, []);
+
+  const unreadFor = (id: PageId) => {
+    if (id === 'announcements') return unread.announcements;
+    if (id === 'messages') return unread.messages;
+    return 0;
+  };
+
+  const totalUnread = unread.announcements + unread.messages;
 
   return (
     <div className="flex h-dvh overflow-hidden bg-gray-50 font-sans text-gray-900">
@@ -2395,7 +2492,7 @@ export default function StaffPortal() {
           </div>
         </div>
         <nav className="flex-1 space-y-0.5 overflow-y-auto px-3 py-3">
-          {NAV_ITEMS.map((item) => {
+          {navItems.map((item) => {
             const Icon = item.icon;
             const active = page === item.id;
             return (
@@ -2411,7 +2508,8 @@ export default function StaffPortal() {
                 )}
               >
                 <Icon className="h-[18px] w-[18px] shrink-0" />
-                {item.label}
+                <span className="min-w-0 flex-1 text-left">{item.label}</span>
+                <NavCount count={unreadFor(item.id)} />
               </button>
             );
           })}
@@ -2432,61 +2530,38 @@ export default function StaffPortal() {
 
       <div className="flex min-w-0 flex-1 flex-col">
         <header className="flex h-16 shrink-0 items-center justify-between gap-2 border-b border-gray-200 bg-white px-3 md:gap-4 md:px-8">
-          {searchExpanded ? (
-            <div className="flex w-full items-center gap-2 md:hidden">
-              <div className="relative flex-1">
-                <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
-                <input
-                  autoFocus
-                  placeholder="Search students, classes"
-                  className="h-10 w-full rounded-lg border border-gray-200 bg-gray-50 py-2 pl-9 pr-3 text-sm placeholder:text-gray-400 focus:border-blue-600 focus:bg-white focus:outline-none focus:ring-1 focus:ring-blue-600"
-                />
-              </div>
-              <IconButton label="Close search" onClick={() => setSearchExpanded(false)}>
-                <X className="h-4 w-4" />
-              </IconButton>
-            </div>
-          ) : (
-            <>
-              <div className="flex min-w-0 items-center gap-1 md:gap-0">
-                <IconButton label="Open menu" onClick={() => setDrawerOpen(true)} className="md:hidden">
-                  <Menu className="h-5 w-5" />
-                </IconButton>
-                <p className="truncate text-sm font-medium text-gray-900 md:hidden">{PAGE_LABELS[page]}</p>
-                <p className="hidden text-sm text-gray-400 md:block">
-                  Staff / <span className="text-gray-900">{PAGE_LABELS[page]}</span>
-                </p>
-              </div>
-              <div className="flex items-center gap-2 md:gap-4">
-                <IconButton label="Search" onClick={() => setSearchExpanded(true)} className="md:hidden">
-                  <Search className="h-4 w-4" />
-                </IconButton>
-                <div className="relative hidden md:block">
-                  <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
-                  <input
-                    placeholder="Search students, classes"
-                    className="h-9 w-64 rounded-lg border border-gray-200 bg-gray-50 py-2 pl-9 pr-3 text-sm placeholder:text-gray-400 focus:border-blue-600 focus:bg-white focus:outline-none focus:ring-1 focus:ring-blue-600"
-                  />
-                </div>
-                <button
-                  type="button"
-                  aria-label="Notifications"
-                  className="relative inline-flex h-10 w-10 items-center justify-center rounded-lg text-gray-400 hover:bg-gray-50 hover:text-gray-700"
-                >
-                  <Bell className="h-4 w-4" />
-                  <span className="absolute right-2.5 top-2.5 h-2 w-2 rounded-full bg-red-500" />
-                </button>
-                <Avatar name={displayName} size="sm" />
-              </div>
-            </>
-          )}
+          <div className="flex min-w-0 items-center gap-1 md:gap-0">
+            <IconButton label="Open menu" onClick={() => setDrawerOpen(true)} className="md:hidden">
+              <Menu className="h-5 w-5" />
+            </IconButton>
+            <p className="truncate text-sm font-medium text-gray-900 md:hidden">{PAGE_LABELS[page]}</p>
+            <p className="hidden text-sm text-gray-400 md:block">
+              Staff / <span className="text-gray-900">{PAGE_LABELS[page]}</span>
+            </p>
+          </div>
+          <div className="flex items-center gap-2 md:gap-4">
+            <NotificationBell
+              tone="staff"
+              totalUnread={totalUnread}
+              announcements={unread.announcements}
+              messages={unread.messages}
+              onOpenAnnouncements={() => goTo('announcements')}
+              onOpenMessages={() => goTo('messages')}
+            />
+            <Avatar name={displayName} size="sm" />
+          </div>
         </header>
 
         <main className="flex-1 overflow-y-auto px-4 py-5 md:px-8 md:py-7">
           {page === 'dashboard' ? (
             <DashboardPage teacherName={displayName} onViewAssignments={() => goTo('assignments')} />
           ) : (
-            <StaffPage page={page} />
+            <StaffPage
+              page={page}
+              onMessageUnreadChange={(count) =>
+                setUnread((prev) => ({ ...prev, messages: count }))
+              }
+            />
           )}
         </main>
       </div>

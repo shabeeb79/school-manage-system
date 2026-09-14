@@ -14,6 +14,10 @@ import {
   ReviewSubmissionDto,
   SubmitAssignmentDto,
 } from './dto/assignment.dto';
+import {
+  assignedClassIdsFromStaff,
+  resolveAssignedClassIds,
+} from '../users/staff-classes';
 
 const MAX_ATTEMPTS = 3;
 
@@ -36,28 +40,65 @@ export class AssignmentsService {
     });
   }
 
+  async createForStaff(createdById: string, dto: CreateAssignmentDto) {
+    const classIds = await resolveAssignedClassIds(this.prisma, createdById);
+    if (!classIds.includes(dto.schoolClassId)) {
+      throw new ForbiddenException(
+        'You can only create assignments for your assigned classes',
+      );
+    }
+    const schoolClass = await this.prisma.schoolClass.findUnique({
+      where: { id: dto.schoolClassId },
+    });
+    if (!schoolClass) {
+      throw new BadRequestException('Class not found');
+    }
+    return this.create(createdById, dto);
+  }
+
   async list(user: {
     id: string;
     role: UserRole;
     studentProfile?: { schoolClassId?: string | null } | null;
-    staffProfile?: { assignedClassId?: string | null } | null;
+    staffProfile?: {
+      assignedClassId?: string | null;
+      classAssignments?: { schoolClassId: string }[];
+    } | null;
   }) {
-    const where: { schoolClassId?: string } = {};
-    if (user.role === UserRole.STUDENT && user.studentProfile?.schoolClassId) {
+    // Students only see teacher-published assignments for their own class.
+    // Staff see assignments for their assigned classes.
+    const where: {
+      schoolClassId?: string | { in: string[] };
+      createdBy?: { role: { in: UserRole[] } };
+    } = {};
+    if (user.role === UserRole.STUDENT) {
+      if (!user.studentProfile?.schoolClassId) {
+        return [];
+      }
       where.schoolClassId = user.studentProfile.schoolClassId;
-    } else if (
-      user.role === UserRole.STAFF &&
-      user.staffProfile?.assignedClassId
-    ) {
-      where.schoolClassId = user.staffProfile.assignedClassId;
+      where.createdBy = {
+        role: { in: [UserRole.STAFF, UserRole.ADMIN] },
+      };
+    } else if (user.role === UserRole.STAFF) {
+      const classIds = assignedClassIdsFromStaff({
+        assignedClassId: user.staffProfile?.assignedClassId,
+        classAssignments: user.staffProfile?.classAssignments,
+      });
+      if (!classIds.length) return [];
+      where.schoolClassId = { in: classIds };
     }
 
-    return this.prisma.assignment.findMany({
+    const assignments = await this.prisma.assignment.findMany({
       where,
       include: {
         schoolClass: true,
         createdBy: {
-          select: { id: true, firstName: true, lastName: true },
+          select: {
+            id: true,
+            firstName: true,
+            lastName: true,
+            role: true,
+          },
         },
         submissions:
           user.role === UserRole.STUDENT
@@ -76,9 +117,87 @@ export class AssignmentsService {
                 orderBy: { submittedAt: 'desc' },
               },
         _count: { select: { submissions: true } },
+        reads:
+          user.role === UserRole.STUDENT
+            ? { where: { userId: user.id }, select: { id: true } }
+            : false,
       },
       orderBy: { dueDate: 'asc' },
     });
+
+    if (user.role !== UserRole.STUDENT) {
+      return assignments;
+    }
+
+    return assignments.map(({ reads, ...assignment }) => ({
+      ...assignment,
+      isUnread:
+        assignment.createdById !== user.id &&
+        Array.isArray(reads) &&
+        reads.length === 0,
+    }));
+  }
+
+  async unreadCount(user: {
+    id: string;
+    role: UserRole;
+    studentProfile?: { schoolClassId?: string | null } | null;
+    staffProfile?: { assignedClassId?: string | null } | null;
+  }) {
+    if (user.role !== UserRole.STUDENT) {
+      return { count: 0 };
+    }
+    const list = await this.list(user);
+    return {
+      count: list.filter(
+        (item) => 'isUnread' in item && Boolean((item as { isUnread?: boolean }).isUnread),
+      ).length,
+    };
+  }
+
+  async markRead(assignmentId: string, userId: string) {
+    const assignment = await this.prisma.assignment.findUnique({
+      where: { id: assignmentId },
+    });
+    if (!assignment) throw new NotFoundException('Assignment not found');
+
+    await this.prisma.assignmentRead.upsert({
+      where: {
+        assignmentId_userId: { assignmentId, userId },
+      },
+      create: { assignmentId, userId },
+      update: { readAt: new Date() },
+    });
+
+    return { ok: true };
+  }
+
+  async markAllRead(user: {
+    id: string;
+    role: UserRole;
+    studentProfile?: { schoolClassId?: string | null } | null;
+    staffProfile?: { assignedClassId?: string | null } | null;
+  }) {
+    if (user.role !== UserRole.STUDENT) {
+      return { marked: 0 };
+    }
+    const list = await this.list(user);
+    const unreadIds = list
+      .filter(
+        (item) => 'isUnread' in item && Boolean((item as { isUnread?: boolean }).isUnread),
+      )
+      .map((item) => item.id);
+    if (!unreadIds.length) return { marked: 0 };
+
+    await this.prisma.assignmentRead.createMany({
+      data: unreadIds.map((assignmentId) => ({
+        assignmentId,
+        userId: user.id,
+      })),
+      skipDuplicates: true,
+    });
+
+    return { marked: unreadIds.length };
   }
 
   private deleteMediaFile(fileUrl?: string | null) {
@@ -103,6 +222,16 @@ export class AssignmentsService {
       where: { id: assignmentId },
     });
     if (!assignment) throw new NotFoundException('Assignment not found');
+
+    const student = await this.prisma.studentProfile.findUnique({
+      where: { userId: studentId },
+      select: { schoolClassId: true },
+    });
+    if (!student?.schoolClassId || student.schoolClassId !== assignment.schoolClassId) {
+      throw new ForbiddenException(
+        'This assignment is only for students in the selected class',
+      );
+    }
 
     const existing = await this.prisma.assignmentSubmission.findUnique({
       where: {
@@ -293,11 +422,12 @@ export class AssignmentsService {
     if (grader.role === UserRole.STAFF) {
       const staff = await this.prisma.staffProfile.findUnique({
         where: { userId: grader.id },
+        include: { classAssignments: { select: { schoolClassId: true } } },
       });
+      const classIds = staff ? assignedClassIdsFromStaff(staff) : [];
       if (
         submission.assignment.createdById === grader.id ||
-        (staff?.assignedClassId &&
-          staff.assignedClassId === submission.assignment.schoolClassId)
+        classIds.includes(submission.assignment.schoolClassId)
       ) {
         return submission;
       }

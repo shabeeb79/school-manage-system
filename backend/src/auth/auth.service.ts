@@ -9,6 +9,12 @@ import { UserRole } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { LoginDto } from './dto/login.dto';
 import { RegisterDto } from './dto/register.dto';
+import {
+  assertSubjectAvailableForClasses,
+  normalizeAssignedClassIds,
+  staffProfileInclude,
+  syncStaffClassAssignments,
+} from '../users/staff-classes';
 
 @Injectable()
 export class AuthService {
@@ -20,7 +26,10 @@ export class AuthService {
   async login(dto: LoginDto) {
     const user = await this.prisma.user.findUnique({
       where: { email: dto.email.toLowerCase() },
-      include: { studentProfile: true, staffProfile: true },
+      include: {
+        studentProfile: { include: { schoolClass: true } },
+        staffProfile: { include: staffProfileInclude },
+      },
     });
     if (!user || !user.isActive) {
       throw new UnauthorizedException('Invalid credentials');
@@ -47,28 +56,42 @@ export class AuthService {
     if (dto.role === UserRole.STAFF && !dto.subject) {
       throw new BadRequestException('subject is required for staff');
     }
-    if (dto.role === UserRole.STAFF && dto.assignedClassId && dto.subject) {
-      const existingSameSubject = await this.prisma.staffProfile.findFirst({
-        where: {
-          assignedClassId: dto.assignedClassId,
-          subject: dto.subject,
-        },
-        include: {
-          user: { select: { firstName: true, lastName: true } },
-        },
+
+    const assignedClassIds =
+      dto.role === UserRole.STAFF
+        ? (normalizeAssignedClassIds({
+            assignedClassIds: dto.assignedClassIds,
+          }) ??
+          (dto.assignedClassId ? [dto.assignedClassId] : []))
+        : [];
+
+    // assignedClassId on the DTO is the class-teacher (homeroom) class when
+    // assignedClassIds is also provided; otherwise treat singular as teaching+homeroom.
+    const classTeacherClassId =
+      dto.role === UserRole.STAFF
+        ? dto.assignedClassIds?.length
+          ? dto.assignedClassId || null
+          : assignedClassIds[0] ?? null
+        : null;
+
+    if (dto.role === UserRole.STAFF && dto.subject && assignedClassIds.length) {
+      await assertSubjectAvailableForClasses(this.prisma, {
+        classIds: assignedClassIds,
+        subject: dto.subject,
       });
-      if (existingSameSubject) {
-        const name =
-          `${existingSameSubject.user.firstName} ${existingSameSubject.user.lastName}`.trim() ||
-          'Another teacher';
-        throw new BadRequestException(
-          `This class already has a ${dto.subject} teacher (${name}).`,
-        );
-      }
+    }
+
+    if (
+      classTeacherClassId &&
+      assignedClassIds.length &&
+      !assignedClassIds.includes(classTeacherClassId)
+    ) {
+      throw new BadRequestException(
+        'Class teacher class must be one of the assigned teaching classes',
+      );
     }
 
     const schoolClassId = dto.schoolClassId;
-
     const hashed = await bcrypt.hash(dto.password, 10);
 
     const user = await this.prisma.user.create({
@@ -95,15 +118,33 @@ export class AuthService {
           staffProfile: {
             create: {
               employeeId: dto.employeeId!,
-              assignedClassId: dto.assignedClassId,
+              assignedClassId: classTeacherClassId,
               department: dto.department,
               subject: dto.subject,
+              phone: dto.phone?.trim() || undefined,
             },
           },
         }),
       },
-      include: { studentProfile: true, staffProfile: true },
+      include: {
+        studentProfile: { include: { schoolClass: true } },
+        staffProfile: { include: staffProfileInclude },
+      },
     });
+
+    if (dto.role === UserRole.STAFF && user.staffProfile) {
+      await syncStaffClassAssignments(
+        this.prisma,
+        user.staffProfile.id,
+        assignedClassIds,
+        classTeacherClassId,
+      );
+      const refreshed = await this.me(user.id);
+      return {
+        accessToken: this.signToken(user.id, user.email, user.role),
+        user: refreshed,
+      };
+    }
 
     const { password: _, ...safe } = user;
     return { accessToken: this.signToken(user.id, user.email, user.role), user: safe };
@@ -114,7 +155,7 @@ export class AuthService {
       where: { id: userId },
       include: {
         studentProfile: { include: { schoolClass: true } },
-        staffProfile: { include: { assignedClass: true } },
+        staffProfile: { include: staffProfileInclude },
       },
     });
     if (!user) throw new UnauthorizedException();

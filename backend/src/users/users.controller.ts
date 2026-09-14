@@ -32,6 +32,15 @@ export class UsersController {
     return this.users.getAssignedStudents(user.id);
   }
 
+  @Get('my-class-students')
+  @Roles(UserRole.STAFF)
+  myClassStudents(
+    @CurrentUser() user: { id: string },
+    @Query('schoolClassId') schoolClassId?: string,
+  ) {
+    return this.users.getClassStudents(user.id, schoolClassId);
+  }
+
   @Post('students')
   @Roles(UserRole.STAFF, UserRole.ADMIN)
   createStudent(
@@ -92,6 +101,7 @@ export class UsersController {
       email?: string;
       employeeId?: string;
       assignedClassId?: string | null;
+      assignedClassIds?: string[] | null;
       department?: string;
       subject?: string;
       phone?: string;

@@ -1,5 +1,4 @@
 import {
-  Bell,
   BookOpen,
   CalendarOff,
   ChevronLeft,
@@ -12,13 +11,13 @@ import {
   MessageSquare,
   Paperclip,
   Plus,
-  Search,
-  Send,
   X,
 } from 'lucide-react';
 import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react';
 import { useAuth } from './auth/AuthContext';
 import api from './api/client';
+import MessagesChat from './components/MessagesChat';
+import NotificationBell from './components/NotificationBell';
 import {
   apiErrorMessage,
   formatLeaveApplied,
@@ -27,7 +26,15 @@ import {
   type ApiLeave,
 } from './lib/leave';
 import { MAX_ASSIGNMENT_MEDIA_BYTES, mediaUrl } from './lib/media';
+import { startPortalNotifications } from './lib/notifications';
 import { teachingSubjectLabel } from './lib/subjects';
+import {
+  emitUnreadChanged,
+  formatUnreadBadge,
+  markAnnouncementsRead,
+  markAssignmentRead,
+  type UnreadCounts,
+} from './lib/unread';
 import { IconButton, Modal, PostMedia } from './ui';
 
 type PageId =
@@ -229,6 +236,7 @@ type FeedPost = {
   createdAt: string;
   fileUrl?: string | null;
   mediaType?: string | null;
+  isUnread?: boolean;
   author?: { firstName?: string; lastName?: string } | null;
   targetClass?: { name?: string } | null;
 };
@@ -255,66 +263,6 @@ const UPCOMING = [
   { title: 'Climate change essay', subject: 'Social Studies', due: '16 Sep' },
   { title: 'Quadratic equations worksheet', subject: 'Mathematics', due: '14 Sep' },
   { title: 'Lab report — acids & bases', subject: 'Science', due: '20 Sep' },
-];
-
-type ChatMessage = { id: string; from: 'in' | 'out'; text: string; time: string };
-type Thread = {
-  id: string;
-  name: string;
-  subject: string;
-  preview: string;
-  time: string;
-  unread: boolean;
-  messages: ChatMessage[];
-};
-
-const INITIAL_THREADS: Thread[] = [
-  {
-    id: 't1',
-    name: 'Kavya Menon',
-    subject: 'English',
-    preview: 'Submit the essay draft by Monday.',
-    time: '10:20 AM',
-    unread: true,
-    messages: [
-      {
-        id: 'm1',
-        from: 'in',
-        text: 'Rahul, remember the Macbeth scene notes from last class — use them for Monday’s draft.',
-        time: '10:05 AM',
-      },
-      { id: 'm2', from: 'out', text: 'Yes ma’am, I’ll finish the draft tonight.', time: '10:12 AM' },
-      { id: 'm3', from: 'in', text: 'Submit the essay draft by Monday.', time: '10:20 AM' },
-    ],
-  },
-  {
-    id: 't2',
-    name: 'Suresh Pillai',
-    subject: 'Mathematics',
-    preview: 'Worksheet solutions uploaded on the portal.',
-    time: 'Yesterday',
-    unread: true,
-    messages: [
-      {
-        id: 'm4',
-        from: 'in',
-        text: 'Worksheet solutions uploaded on the portal. Check questions 7–12 carefully.',
-        time: 'Yesterday',
-      },
-    ],
-  },
-  {
-    id: 't3',
-    name: 'Fathima Beevi',
-    subject: 'Science',
-    preview: 'Bring your lab notebook on Thursday.',
-    time: 'Mon',
-    unread: false,
-    messages: [
-      { id: 'm5', from: 'in', text: 'Bring your lab notebook on Thursday for the acids & bases practical.', time: 'Mon' },
-      { id: 'm6', from: 'out', text: 'Noted, thank you.', time: 'Mon' },
-    ],
-  },
 ];
 
 function gradeTone(grade: string): BadgeTone {
@@ -482,6 +430,8 @@ function AnnouncementsPage() {
       try {
         const { data } = await api.get('/posts/feed');
         if (active) setPosts(data);
+        await markAnnouncementsRead();
+        emitUnreadChanged();
       } catch {
         if (active) setError('Could not load announcements.');
       } finally {
@@ -512,6 +462,7 @@ function AnnouncementsPage() {
                   <Badge tone={announcementTone(item.audience)}>
                     {author || 'Announcement'}
                   </Badge>
+                  {item.isUnread && <Badge tone="red">New</Badge>}
                   <span className="text-xs text-gray-400">
                     {formatAnnouncementDate(item.createdAt)}
                   </span>
@@ -877,6 +828,14 @@ type StudentAssignment = {
   subject: string;
   dueDate: string;
   maxScore: number | string;
+  isUnread?: boolean;
+  createdBy?: {
+    id: string;
+    firstName?: string;
+    lastName?: string;
+    role?: string;
+  } | null;
+  schoolClass?: { id: string; name: string; section?: string | null } | null;
   submissions?: Array<{
     id: string;
     content: string;
@@ -889,6 +848,13 @@ type StudentAssignment = {
     submittedAt: string;
   }>;
 };
+
+function teacherName(assignment: StudentAssignment) {
+  const teacher = assignment.createdBy;
+  if (!teacher) return 'Teacher';
+  const name = `${teacher.firstName ?? ''} ${teacher.lastName ?? ''}`.trim();
+  return name || 'Teacher';
+}
 
 function formatStudentDue(date: string) {
   try {
@@ -934,6 +900,28 @@ function AssignmentsPage() {
   const submission = selected?.submissions?.[0];
   const attempts = submission?.attemptCount ?? 0;
   const blocked = attempts >= MAX_SUBMISSION_ATTEMPTS;
+
+  useEffect(() => {
+    if (!selectedId) return;
+    let active = true;
+    (async () => {
+      try {
+        await markAssignmentRead(selectedId);
+        if (!active) return;
+        setAssignments((prev) =>
+          prev.map((item) =>
+            item.id === selectedId ? { ...item, isUnread: false } : item,
+          ),
+        );
+        emitUnreadChanged();
+      } catch {
+        /* ignore mark failures */
+      }
+    })().catch(console.error);
+    return () => {
+      active = false;
+    };
+  }, [selectedId]);
 
   const onFileChange = (next: File | null) => {
     setUploadError('');
@@ -1005,9 +993,12 @@ function AssignmentsPage() {
         </button>
         <SectionHeader
           title={selected.title}
-          subtitle={`${selected.subject} · Due ${formatStudentDue(selected.dueDate)}`}
+          subtitle={`${selected.subject} · By ${teacherName(selected)} · Due ${formatStudentDue(selected.dueDate)}`}
         />
         <p className="mb-4 text-sm text-gray-500">{selected.description}</p>
+        <p className="mb-4 text-xs text-gray-400">
+          Published by {teacherName(selected)} · only students in your class can submit
+        </p>
 
         <Card className="mb-4 p-4 md:p-5">
           <div className="flex flex-wrap items-center gap-2">
@@ -1122,7 +1113,10 @@ function AssignmentsPage() {
 
   return (
     <>
-      <SectionHeader title="Assignments" subtitle="Upload photo or video submissions under 2MB" />
+      <SectionHeader
+        title="Assignments"
+        subtitle="Assignments published by your teachers for your class"
+      />
       {loading && <p className="text-sm text-gray-500">Loading assignments...</p>}
       {error && <p className="mb-4 text-sm text-rose-600">{error}</p>}
       <div className="space-y-3">
@@ -1137,9 +1131,12 @@ function AssignmentsPage() {
               className="flex w-full items-start gap-3 rounded-2xl border border-violet-100 bg-white p-4 text-left shadow-sm shadow-violet-100/50 hover:border-indigo-200 hover:bg-violet-50/40 md:p-5"
             >
               <div className="min-w-0 flex-1">
-                <p className="font-semibold text-gray-900">{item.title}</p>
+                <div className="flex flex-wrap items-center gap-2">
+                  <p className="font-semibold text-gray-900">{item.title}</p>
+                  {item.isUnread && <Badge tone="red">New</Badge>}
+                </div>
                 <p className="mt-1 text-sm text-gray-500">
-                  {item.subject} · Due {formatStudentDue(item.dueDate)}
+                  {item.subject} · By {teacherName(item)} · Due {formatStudentDue(item.dueDate)}
                   {used > 0 ? ` · Attempt ${used}/${MAX_SUBMISSION_ATTEMPTS}` : ''}
                 </p>
               </div>
@@ -1159,7 +1156,7 @@ function AssignmentsPage() {
         })}
         {!loading && !assignments.length && (
           <Card className="p-6 text-center text-sm text-gray-500">
-            No assignments for your class yet.
+            No teacher assignments for your class yet.
           </Card>
         )}
       </div>
@@ -1348,172 +1345,17 @@ function LeavePage() {
   );
 }
 
-function MessagesPage() {
-  const [threads, setThreads] = useState(INITIAL_THREADS);
-  const [activeId, setActiveId] = useState(INITIAL_THREADS[0].id);
-  const [mobileShowChat, setMobileShowChat] = useState(false);
-  const [draft, setDraft] = useState('');
-  const [threadQuery, setThreadQuery] = useState('');
-
-  const active = threads.find((thread) => thread.id === activeId) ?? threads[0];
-  const visibleThreads = threads.filter((thread) =>
-    thread.name.toLowerCase().includes(threadQuery.toLowerCase()),
-  );
-
-  const openThread = (id: string) => {
-    setActiveId(id);
-    setMobileShowChat(true);
-    setThreads((current) =>
-      current.map((thread) => (thread.id === id ? { ...thread, unread: false } : thread)),
-    );
-  };
-
-  const sendMessage = () => {
-    const text = draft.trim();
-    if (!text) return;
-    const message: ChatMessage = { id: `out-${Date.now()}`, from: 'out', text, time: 'Just now' };
-    setThreads((current) =>
-      current.map((thread) =>
-        thread.id === active.id
-          ? {
-              ...thread,
-              preview: text,
-              time: 'Just now',
-              unread: false,
-              messages: [...thread.messages, message],
-            }
-          : thread,
-      ),
-    );
-    setDraft('');
-  };
-
+function MessagesPage({
+  onUnreadChange,
+}: {
+  onUnreadChange?: (count: number) => void;
+}) {
   return (
-    <>
-      <SectionHeader title="Messages" subtitle="Chat with your teachers" />
-      <Card className="flex h-[calc(100dvh-12rem)] overflow-hidden md:h-[480px]">
-        <div
-          className={cn(
-            'w-full shrink-0 flex-col border-violet-100 md:flex md:w-72 md:border-r',
-            mobileShowChat ? 'hidden md:flex' : 'flex',
-          )}
-        >
-          <div className="border-b border-violet-100 p-3">
-            <div className="relative">
-              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
-              <input
-                value={threadQuery}
-                onChange={(event) => setThreadQuery(event.target.value)}
-                placeholder="Search teachers"
-                className="h-10 w-full rounded-full border border-violet-100 bg-violet-50/50 py-2 pl-9 pr-4 text-sm placeholder:text-gray-400 focus:border-indigo-600 focus:bg-white focus:outline-none focus:ring-1 focus:ring-indigo-600"
-              />
-            </div>
-          </div>
-          <ul className="flex-1 overflow-y-auto">
-            {visibleThreads.map((thread) => (
-              <li key={thread.id}>
-                <button
-                  type="button"
-                  onClick={() => openThread(thread.id)}
-                  className={cn(
-                    'flex w-full items-start gap-3 px-3 py-3 text-left hover:bg-violet-50/60',
-                    thread.id === active.id && 'bg-violet-50 hover:bg-violet-50',
-                  )}
-                >
-                  <Avatar name={thread.name} />
-                  <span className="min-w-0 flex-1">
-                    <span className="flex items-center justify-between gap-2">
-                      <span
-                        className={cn(
-                          'truncate text-sm',
-                          thread.unread ? 'font-bold text-gray-900' : 'font-medium text-gray-900',
-                        )}
-                      >
-                        {thread.name}
-                      </span>
-                      <span className="shrink-0 text-xs text-gray-400">{thread.time}</span>
-                    </span>
-                    <span className="mt-0.5 block truncate text-xs text-violet-500">{thread.subject}</span>
-                    <span
-                      className={cn(
-                        'mt-0.5 block truncate text-xs',
-                        thread.unread ? 'font-semibold text-gray-700' : 'text-gray-400',
-                      )}
-                    >
-                      {thread.preview}
-                    </span>
-                  </span>
-                </button>
-              </li>
-            ))}
-          </ul>
-        </div>
-
-        <div className={cn('min-w-0 flex-1 flex-col', mobileShowChat ? 'flex' : 'hidden md:flex')}>
-          <div className="flex items-center gap-2 border-b border-violet-100 px-3 py-3 md:px-4">
-            <IconButton
-              label="Back to conversations"
-              onClick={() => setMobileShowChat(false)}
-              className="md:hidden"
-            >
-              <ChevronLeft className="h-5 w-5" />
-            </IconButton>
-            <Avatar name={active.name} />
-            <div className="min-w-0">
-              <p className="truncate font-semibold text-gray-900">{active.name}</p>
-              <p className="truncate text-xs text-gray-400">{active.subject}</p>
-            </div>
-          </div>
-          <div className="flex-1 space-y-3 overflow-y-auto bg-violet-50/30 px-3 py-4 md:px-4">
-            {active.messages.map((message) => (
-              <div
-                key={message.id}
-                className={cn('flex', message.from === 'out' ? 'justify-end' : 'justify-start')}
-              >
-                <div
-                  className={cn(
-                    'max-w-[80%] rounded-2xl px-3 py-2 text-sm',
-                    message.from === 'out'
-                      ? 'bg-indigo-600 text-white'
-                      : 'border border-violet-100 bg-white text-gray-900',
-                  )}
-                >
-                  <p>{message.text}</p>
-                  <p
-                    className={cn(
-                      'mt-1 text-[11px]',
-                      message.from === 'out' ? 'text-indigo-100' : 'text-gray-400',
-                    )}
-                  >
-                    {message.time}
-                  </p>
-                </div>
-              </div>
-            ))}
-          </div>
-          <form
-            className="flex items-center gap-2 border-t border-violet-100 p-3"
-            onSubmit={(event) => {
-              event.preventDefault();
-              sendMessage();
-            }}
-          >
-            <IconButton label="Attach file">
-              <Paperclip className="h-4 w-4" />
-            </IconButton>
-            <input
-              value={draft}
-              onChange={(event) => setDraft(event.target.value)}
-              placeholder="Write a message"
-              className="h-10 min-w-0 flex-1 rounded-full border border-violet-100 bg-white px-4 text-sm placeholder:text-gray-400 focus:border-indigo-600 focus:outline-none focus:ring-1 focus:ring-indigo-600"
-            />
-            <PrimaryButton type="submit" icon={<Send className="h-4 w-4" />}>
-              Send
-            </PrimaryButton>
-          </form>
-        </div>
-      </Card>
-    </>
+    <MessagesChat
+      subtitle="Chat with your teachers"
+      variant="student"
+      onUnreadChange={onUnreadChange}
+    />
   );
 }
 
@@ -1523,17 +1365,40 @@ const PAGES = {
   grades: GradesPage,
   assignments: AssignmentsPage,
   leave: LeavePage,
-  messages: MessagesPage,
 };
 
-function StudentPage({ page }: { page: Exclude<PageId, 'dashboard'> }) {
+function StudentPage({
+  page,
+  onMessageUnreadChange,
+}: {
+  page: Exclude<PageId, 'dashboard'>;
+  onMessageUnreadChange?: (count: number) => void;
+}) {
+  if (page === 'messages') {
+    return <MessagesPage onUnreadChange={onMessageUnreadChange} />;
+  }
   const Page = PAGES[page];
   return <Page />;
+}
+
+function NavCount({ count }: { count: number }) {
+  const label = formatUnreadBadge(count);
+  if (!label) return null;
+  return (
+    <span className="ml-1.5 inline-flex min-w-[1.15rem] items-center justify-center rounded-full bg-rose-500 px-1 py-0.5 text-[10px] font-semibold leading-none text-white">
+      {label}
+    </span>
+  );
 }
 
 export default function StudentPortal() {
   const { user, logout } = useAuth();
   const [page, setPage] = useState<PageId>('dashboard');
+  const [unread, setUnread] = useState<UnreadCounts>({
+    announcements: 0,
+    assignments: 0,
+    messages: 0,
+  });
 
   const firstName = user?.firstName ?? STUDENT.firstName;
   const displayName = user ? `${user.firstName} ${user.lastName}` : STUDENT.name;
@@ -1543,6 +1408,23 @@ export default function StudentPortal() {
     const section = schoolClass.section?.trim();
     return section ? `${schoolClass.name} - ${section}` : schoolClass.name;
   })();
+
+  useEffect(() => {
+    return startPortalNotifications({
+      includeAssignments: true,
+      onCounts: setUnread,
+    });
+  }, []);
+
+  const unreadFor = (id: PageId) => {
+    if (id === 'announcements') return unread.announcements;
+    if (id === 'assignments') return unread.assignments;
+    if (id === 'messages') return unread.messages;
+    return 0;
+  };
+
+  const totalUnread =
+    unread.announcements + unread.assignments + unread.messages;
 
   return (
     <div className="min-h-dvh bg-gradient-to-b from-violet-50/60 to-white font-sans text-gray-900">
@@ -1567,27 +1449,30 @@ export default function StudentPortal() {
                   type="button"
                   onClick={() => setPage(item.id)}
                   className={cn(
-                    'rounded-full px-3 py-2 text-sm transition-colors',
+                    'inline-flex items-center rounded-full px-3 py-2 text-sm transition-colors',
                     active
                       ? 'bg-indigo-50 font-medium text-indigo-700'
                       : 'text-gray-500 hover:bg-violet-50 hover:text-gray-700',
                   )}
                 >
                   {item.label}
+                  <NavCount count={unreadFor(item.id)} />
                 </button>
               );
             })}
           </nav>
 
           <div className="flex items-center gap-1 md:gap-2">
-            <button
-              type="button"
-              aria-label="Notifications"
-              className="relative inline-flex h-10 w-10 items-center justify-center rounded-full text-gray-400 hover:bg-violet-50 hover:text-gray-700"
-            >
-              <Bell className="h-4 w-4" />
-              <span className="absolute right-2.5 top-2.5 h-2 w-2 rounded-full bg-fuchsia-500" />
-            </button>
+            <NotificationBell
+              tone="student"
+              totalUnread={totalUnread}
+              announcements={unread.announcements}
+              messages={unread.messages}
+              assignments={unread.assignments}
+              onOpenAnnouncements={() => setPage('announcements')}
+              onOpenMessages={() => setPage('messages')}
+              onOpenAssignments={() => setPage('assignments')}
+            />
             <Avatar name={displayName} size="sm" />
             <IconButton label="Sign out" onClick={logout}>
               <LogOut className="h-4 w-4" />
@@ -1600,18 +1485,29 @@ export default function StudentPortal() {
             {NAV_ITEMS.map((item) => {
               const Icon = item.icon;
               const active = page === item.id;
+              const count = unreadFor(item.id);
               return (
                 <button
                   key={item.id}
                   type="button"
                   onClick={() => setPage(item.id)}
                   className={cn(
-                    'inline-flex h-10 shrink-0 items-center gap-1.5 rounded-full px-3 text-xs font-medium whitespace-nowrap',
+                    'relative inline-flex h-10 shrink-0 items-center gap-1.5 rounded-full px-3 text-xs font-medium whitespace-nowrap',
                     active ? 'bg-indigo-600 text-white' : 'bg-violet-50 text-gray-500',
                   )}
                 >
                   <Icon className="h-3.5 w-3.5" />
                   {item.short}
+                  {count > 0 && (
+                    <span
+                      className={cn(
+                        'inline-flex min-w-[1.1rem] items-center justify-center rounded-full px-1 py-0.5 text-[10px] font-semibold leading-none',
+                        active ? 'bg-white text-indigo-700' : 'bg-rose-500 text-white',
+                      )}
+                    >
+                      {formatUnreadBadge(count)}
+                    </span>
+                  )}
                 </button>
               );
             })}
@@ -1623,7 +1519,12 @@ export default function StudentPortal() {
         {page === 'dashboard' ? (
           <DashboardPage firstName={firstName} className={classLabel} />
         ) : (
-          <StudentPage page={page} />
+          <StudentPage
+            page={page}
+            onMessageUnreadChange={(count) =>
+              setUnread((prev) => ({ ...prev, messages: count }))
+            }
+          />
         )}
       </main>
     </div>

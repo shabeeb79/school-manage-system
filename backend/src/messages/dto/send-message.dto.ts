@@ -1,12 +1,21 @@
-import { IsString, IsUUID } from 'class-validator';
+import { IsEnum, IsOptional, IsString, IsUUID, MaxLength } from 'class-validator';
+import { MessageKind } from '@prisma/client';
 
 export class SendMessageDto {
   @IsUUID()
   receiverId: string;
 
+  @IsOptional()
   @IsString()
-  subject: string;
+  @MaxLength(200)
+  subject?: string;
 
+  @IsOptional()
   @IsString()
-  body: string;
+  @MaxLength(5000)
+  body?: string;
+
+  @IsOptional()
+  @IsEnum(MessageKind)
+  kind?: MessageKind;
 }

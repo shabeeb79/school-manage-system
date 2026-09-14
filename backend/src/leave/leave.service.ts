@@ -23,7 +23,12 @@ const requesterSelect = {
   staffProfile: {
     select: {
       employeeId: true,
-      assignedClass: { select: { id: true, name: true } },
+      assignedClass: { select: { id: true, name: true, section: true } },
+      classAssignments: {
+        select: {
+          schoolClass: { select: { id: true, name: true, section: true } },
+        },
+      },
     },
   },
 } as const;
@@ -57,7 +62,11 @@ export class LeaveService {
 
   async list(user: { id: string; role: UserRole }) {
     if (user.role === UserRole.ADMIN) {
+      // Admin sees all leave: teacher leave to approve, student leave to monitor.
       return this.prisma.leaveRequest.findMany({
+        where: {
+          requester: { role: { in: [UserRole.STAFF, UserRole.STUDENT] } },
+        },
         include: {
           requester: { select: requesterSelect },
           reviewedBy: {
@@ -71,7 +80,9 @@ export class LeaveService {
     if (user.role === UserRole.STAFF) {
       const staff = await this.prisma.staffProfile.findUnique({
         where: { userId: user.id },
+        select: { assignedClassId: true },
       });
+      // Student leave is only for class teachers (homeroom), not subject teachers.
       const studentIds = staff?.assignedClassId
         ? (
             await this.prisma.studentProfile.findMany({
@@ -144,13 +155,16 @@ export class LeaveService {
       }
       const staff = await this.prisma.staffProfile.findUnique({
         where: { userId: reviewer.id },
+        select: { assignedClassId: true },
       });
+      const studentClassId = leave.requester.studentProfile?.schoolClassId;
       if (
         !staff?.assignedClassId ||
-        staff.assignedClassId !== leave.requester.studentProfile?.schoolClassId
+        !studentClassId ||
+        staff.assignedClassId !== studentClassId
       ) {
         throw new ForbiddenException(
-          'You can only review leave for students in your assigned class',
+          'Only the class teacher can review leave for students in their class',
         );
       }
     } else if (leave.requester.role === UserRole.STAFF) {

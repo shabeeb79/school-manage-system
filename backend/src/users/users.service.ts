@@ -7,6 +7,13 @@ import {
 import { TeachingSubject, UserRole } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
 import { PrismaService } from '../prisma/prisma.service';
+import {
+  assertSubjectAvailableForClasses,
+  assignedClassIdsFromStaff,
+  normalizeAssignedClassIds,
+  staffProfileInclude,
+  syncStaffClassAssignments,
+} from './staff-classes';
 
 type StudentWriteInput = {
   email?: string;
@@ -37,7 +44,7 @@ export class UsersService {
         isActive: true,
         createdAt: true,
         studentProfile: { include: { schoolClass: true } },
-        staffProfile: { include: { assignedClass: true } },
+        staffProfile: { include: staffProfileInclude },
       },
       orderBy: { lastName: 'asc' },
     });
@@ -55,7 +62,7 @@ export class UsersService {
         isActive: true,
         createdAt: true,
         studentProfile: { include: { schoolClass: true } },
-        staffProfile: { include: { assignedClass: true } },
+        staffProfile: { include: staffProfileInclude },
       },
     });
     if (!user) throw new NotFoundException('User not found');
@@ -65,12 +72,48 @@ export class UsersService {
   async getAssignedStudents(staffUserId: string) {
     const staff = await this.prisma.staffProfile.findUnique({
       where: { userId: staffUserId },
+      include: { classAssignments: { select: { schoolClassId: true } } },
     });
-    if (!staff?.assignedClassId) {
-      return [];
-    }
+    if (!staff) return [];
+
+    const classIds = assignedClassIdsFromStaff(staff);
+    if (!classIds.length) return [];
+
     return this.prisma.studentProfile.findMany({
-      where: { schoolClassId: staff.assignedClassId },
+      where: { schoolClassId: { in: classIds } },
+      include: {
+        user: {
+          select: {
+            id: true,
+            email: true,
+            firstName: true,
+            lastName: true,
+            isActive: true,
+          },
+        },
+        schoolClass: true,
+      },
+      orderBy: [{ schoolClassId: 'asc' }, { studentId: 'asc' }],
+    });
+  }
+
+  /** Class-teacher roster only (attendance). Empty if not a class teacher. */
+  async getClassStudents(staffUserId: string, schoolClassId?: string) {
+    const staff = await this.prisma.staffProfile.findUnique({
+      where: { userId: staffUserId },
+      select: { assignedClassId: true },
+    });
+    const homeroomId = staff?.assignedClassId;
+    if (!homeroomId) return [];
+
+    if (schoolClassId && schoolClassId !== homeroomId) {
+      throw new ForbiddenException(
+        'You can only mark attendance for your class-teacher class',
+      );
+    }
+
+    return this.prisma.studentProfile.findMany({
+      where: { schoolClassId: homeroomId },
       include: {
         user: {
           select: {
@@ -119,18 +162,38 @@ export class UsersService {
       throw new BadRequestException('studentId is required');
     }
 
-    let schoolClassId = data.schoolClassId;
+    let schoolClassId = data.schoolClassId?.trim() || undefined;
 
     if (actor.role === UserRole.STAFF) {
       const staff = await this.prisma.staffProfile.findUnique({
         where: { userId: actor.id },
+        include: { classAssignments: { select: { schoolClassId: true } } },
       });
-      if (!staff?.assignedClassId) {
-        throw new BadRequestException('You have no assigned class');
+      if (!staff) {
+        throw new ForbiddenException('Staff profile not found');
       }
-      schoolClassId = staff.assignedClassId;
+      const allowed = assignedClassIdsFromStaff(staff);
+      if (!allowed.length) {
+        throw new ForbiddenException(
+          'Assign at least one class to this teacher before adding students',
+        );
+      }
+      if (!schoolClassId) {
+        schoolClassId = allowed[0];
+      } else if (!allowed.includes(schoolClassId)) {
+        throw new ForbiddenException(
+          'You can only add students to your assigned classes',
+        );
+      }
     } else if (!schoolClassId) {
       throw new BadRequestException('schoolClassId is required');
+    }
+
+    const schoolClass = await this.prisma.schoolClass.findUnique({
+      where: { id: schoolClassId },
+    });
+    if (!schoolClass) {
+      throw new BadRequestException('Class not found');
     }
 
     const exists = await this.prisma.user.findUnique({ where: { email } });
@@ -232,19 +295,23 @@ export class UsersService {
     studentUserId: string,
     data: StudentWriteInput,
   ) {
-    const staff = await this.prisma.staffProfile.findUnique({
-      where: { userId: staffUserId },
-    });
     const student = await this.prisma.studentProfile.findUnique({
       where: { userId: studentUserId },
     });
     if (!student) throw new NotFoundException('Student not found');
+
+    const staff = await this.prisma.staffProfile.findUnique({
+      where: { userId: staffUserId },
+      include: { classAssignments: { select: { schoolClassId: true } } },
+    });
+    const allowed = staff ? assignedClassIdsFromStaff(staff) : [];
     if (
-      staff &&
-      staff.assignedClassId &&
-      student.schoolClassId !== staff.assignedClassId
+      !student.schoolClassId ||
+      !allowed.includes(student.schoolClassId)
     ) {
-      throw new ForbiddenException('Student is not in your assigned class');
+      throw new ForbiddenException(
+        'You can only update students in your assigned classes',
+      );
     }
 
     return this.applyStudentUpdate(studentUserId, {
@@ -267,6 +334,7 @@ export class UsersService {
       email?: string;
       employeeId?: string;
       assignedClassId?: string | null;
+      assignedClassIds?: string[] | null;
       department?: string;
       subject?: string | null;
       phone?: string;
@@ -274,7 +342,11 @@ export class UsersService {
   ) {
     const user = await this.prisma.user.findUnique({
       where: { id: staffUserId },
-      include: { staffProfile: true },
+      include: {
+        staffProfile: {
+          include: { classAssignments: { select: { schoolClassId: true } } },
+        },
+      },
     });
     if (!user || user.role !== UserRole.STAFF || !user.staffProfile) {
       throw new NotFoundException('Teacher not found');
@@ -298,42 +370,54 @@ export class UsersService {
       }
     }
 
-    if (data.assignedClassId) {
-      const subjectForCheck =
-        data.subject !== undefined
-          ? data.subject
-          : user.staffProfile.subject;
-      if (subjectForCheck) {
-        const existingSameSubject = await this.prisma.staffProfile.findFirst({
-          where: {
-            assignedClassId: data.assignedClassId,
-            subject: subjectForCheck as TeachingSubject,
-            NOT: { userId: staffUserId },
-          },
-          include: {
-            user: { select: { firstName: true, lastName: true } },
-          },
-        });
-        if (existingSameSubject) {
-          const name =
-            `${existingSameSubject.user.firstName} ${existingSameSubject.user.lastName}`.trim() ||
-            'Another teacher';
-          throw new BadRequestException(
-            `This class already has a ${subjectForCheck} teacher (${name}).`,
-          );
-        }
-      }
-    }
-
     let subjectValue: TeachingSubject | null | undefined = undefined;
     if (data.subject !== undefined) {
       if (!data.subject) {
         subjectValue = null;
-      } else if ((Object.values(TeachingSubject) as string[]).includes(data.subject)) {
+      } else if (
+        (Object.values(TeachingSubject) as string[]).includes(data.subject)
+      ) {
         subjectValue = data.subject as TeachingSubject;
       } else {
         throw new BadRequestException('Invalid teaching subject');
       }
+    }
+
+    const nextClassIds = normalizeAssignedClassIds({
+      assignedClassIds: data.assignedClassIds,
+    });
+    // When teaching classes are updated, assignedClassId is the class-teacher class.
+    // When only assignedClassId is sent without assignedClassIds, update homeroom only.
+    const classTeacherUpdate =
+      data.assignedClassId !== undefined || data.assignedClassIds !== undefined
+        ? data.assignedClassId !== undefined
+          ? data.assignedClassId
+          : null
+        : undefined;
+
+    const subjectForCheck =
+      subjectValue !== undefined
+        ? subjectValue
+        : user.staffProfile.subject;
+    const classIdsForCheck =
+      nextClassIds ?? assignedClassIdsFromStaff(user.staffProfile);
+
+    if (subjectForCheck && classIdsForCheck.length) {
+      await assertSubjectAvailableForClasses(this.prisma, {
+        classIds: classIdsForCheck,
+        subject: subjectForCheck,
+        excludeUserId: staffUserId,
+      });
+    }
+
+    if (
+      classTeacherUpdate &&
+      classIdsForCheck.length &&
+      !classIdsForCheck.includes(classTeacherUpdate)
+    ) {
+      throw new BadRequestException(
+        'Class teacher class must be one of the assigned teaching classes',
+      );
     }
 
     await this.prisma.user.update({
@@ -351,16 +435,11 @@ export class UsersService {
       },
     });
 
-    return this.prisma.staffProfile.update({
+    await this.prisma.staffProfile.update({
       where: { userId: staffUserId },
       data: {
         ...(data.employeeId !== undefined
           ? { employeeId: data.employeeId.trim() }
-          : {}),
-        ...(data.assignedClassId !== undefined
-          ? data.assignedClassId
-            ? { assignedClass: { connect: { id: data.assignedClassId } } }
-            : { assignedClass: { disconnect: true } }
           : {}),
         ...(data.department !== undefined
           ? { department: data.department?.trim() || null }
@@ -370,6 +449,30 @@ export class UsersService {
           ? { phone: data.phone?.trim() || null }
           : {}),
       },
+    });
+
+    if (nextClassIds !== undefined) {
+      await syncStaffClassAssignments(
+        this.prisma,
+        user.staffProfile.id,
+        nextClassIds,
+        classTeacherUpdate ?? null,
+      );
+    } else if (classTeacherUpdate !== undefined) {
+      const teachingIds = assignedClassIdsFromStaff(user.staffProfile);
+      if (classTeacherUpdate && !teachingIds.includes(classTeacherUpdate)) {
+        throw new BadRequestException(
+          'Class teacher class must be one of the assigned teaching classes',
+        );
+      }
+      await this.prisma.staffProfile.update({
+        where: { userId: staffUserId },
+        data: { assignedClassId: classTeacherUpdate },
+      });
+    }
+
+    return this.prisma.staffProfile.findUnique({
+      where: { userId: staffUserId },
       include: {
         user: {
           select: {
@@ -381,7 +484,7 @@ export class UsersService {
             isActive: true,
           },
         },
-        assignedClass: true,
+        ...staffProfileInclude,
       },
     });
   }

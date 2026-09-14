@@ -48,7 +48,7 @@ export class AssignmentsController {
     @CurrentUser() user: { id: string },
     @Body() dto: CreateAssignmentDto,
   ) {
-    return this.assignments.create(user.id, dto);
+    return this.assignments.createForStaff(user.id, dto);
   }
 
   @Get()
@@ -58,10 +58,54 @@ export class AssignmentsController {
       id: string;
       role: UserRole;
       studentProfile?: { schoolClassId?: string | null } | null;
-      staffProfile?: { assignedClassId?: string | null } | null;
+      staffProfile?: {
+        assignedClassId?: string | null;
+        classAssignments?: { schoolClassId: string }[];
+      } | null;
     },
   ) {
     return this.assignments.list(user);
+  }
+
+  @Get('unread-count')
+  unreadCount(
+    @CurrentUser()
+    user: {
+      id: string;
+      role: UserRole;
+      studentProfile?: { schoolClassId?: string | null } | null;
+      staffProfile?: {
+        assignedClassId?: string | null;
+        classAssignments?: { schoolClassId: string }[];
+      } | null;
+    },
+  ) {
+    return this.assignments.unreadCount(user);
+  }
+
+  @Patch('read-all')
+  markAllRead(
+    @CurrentUser()
+    user: {
+      id: string;
+      role: UserRole;
+      studentProfile?: { schoolClassId?: string | null } | null;
+      staffProfile?: {
+        assignedClassId?: string | null;
+        classAssignments?: { schoolClassId: string }[];
+      } | null;
+    },
+  ) {
+    return this.assignments.markAllRead(user);
+  }
+
+  @Patch(':id/read')
+  @Roles(UserRole.STUDENT)
+  markRead(
+    @Param('id') id: string,
+    @CurrentUser() user: { id: string },
+  ) {
+    return this.assignments.markRead(id, user.id);
   }
 
   @Post(':id/submit')

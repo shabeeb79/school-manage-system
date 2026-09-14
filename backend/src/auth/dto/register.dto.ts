@@ -1,4 +1,5 @@
 import {
+  IsArray,
   IsEmail,
   IsEnum,
   IsOptional,
@@ -36,9 +37,15 @@ export class RegisterDto {
   @IsString()
   schoolClassId?: string;
 
+  /** @deprecated Prefer assignedClassIds */
   @IsOptional()
   @IsString()
   assignedClassId?: string;
+
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  assignedClassIds?: string[];
 
   @IsOptional()
   @IsString()
@@ -55,6 +62,10 @@ export class RegisterDto {
   @IsOptional()
   @IsString()
   parentPhone?: string;
+
+  @IsOptional()
+  @IsString()
+  phone?: string;
 
   @IsOptional()
   @IsString()

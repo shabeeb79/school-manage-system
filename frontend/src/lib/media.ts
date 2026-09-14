@@ -12,3 +12,4 @@ export function mediaUrl(path?: string | null) {
 
 export const MAX_ASSIGNMENT_MEDIA_BYTES = 2 * 1024 * 1024;
 export const MAX_MEDIA_BYTES = MAX_ASSIGNMENT_MEDIA_BYTES;
+export const MAX_MESSAGE_PHOTO_BYTES = 1024 * 1024;

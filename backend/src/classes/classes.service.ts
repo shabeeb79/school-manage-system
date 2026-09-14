@@ -13,10 +13,25 @@ export class ClassesService {
   findAll() {
     return this.prisma.schoolClass.findMany({
       include: {
-        _count: { select: { students: true, staff: true } },
+        _count: {
+          select: {
+            students: true,
+            staff: true,
+            classAssignments: true,
+          },
+        },
         staff: {
           include: {
             user: { select: { firstName: true, lastName: true } },
+          },
+        },
+        classAssignments: {
+          include: {
+            staffProfile: {
+              include: {
+                user: { select: { firstName: true, lastName: true } },
+              },
+            },
           },
         },
       },
@@ -28,8 +43,46 @@ export class ClassesService {
     const schoolClass = await this.prisma.schoolClass.findUnique({
       where: { id },
       include: {
-        students: { include: { user: { select: { id: true, firstName: true, lastName: true, email: true } } } },
-        staff: { include: { user: { select: { id: true, firstName: true, lastName: true, email: true } } } },
+        students: {
+          include: {
+            user: {
+              select: {
+                id: true,
+                firstName: true,
+                lastName: true,
+                email: true,
+              },
+            },
+          },
+        },
+        staff: {
+          include: {
+            user: {
+              select: {
+                id: true,
+                firstName: true,
+                lastName: true,
+                email: true,
+              },
+            },
+          },
+        },
+        classAssignments: {
+          include: {
+            staffProfile: {
+              include: {
+                user: {
+                  select: {
+                    id: true,
+                    firstName: true,
+                    lastName: true,
+                    email: true,
+                  },
+                },
+              },
+            },
+          },
+        },
       },
     });
     if (!schoolClass) throw new NotFoundException('Class not found');

@@ -1,18 +1,64 @@
-import { PrismaClient, UserRole, FeeStatus, AttendanceStatus } from '@prisma/client';
+import { PrismaClient, UserRole, TeachingSubject } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
 
 const prisma = new PrismaClient();
 
+const SUBJECTS: TeachingSubject[] = [
+  TeachingSubject.ARABIC,
+  TeachingSubject.ENGLISH,
+  TeachingSubject.MALAYALAM,
+  TeachingSubject.MATHEMATICS,
+  TeachingSubject.SOCIAL_SCIENCE,
+  TeachingSubject.HINDI,
+  TeachingSubject.CHEMISTRY,
+  TeachingSubject.BIOLOGY,
+  TeachingSubject.PHYSICS,
+  TeachingSubject.IT,
+];
+
+const STAFF = [
+  { firstName: 'Amina', lastName: 'Hassan', email: 'arabic@school.com' },
+  { firstName: 'Emma', lastName: 'Wright', email: 'english@school.com' },
+  { firstName: 'Ravi', lastName: 'Nair', email: 'malayalam@school.com' },
+  { firstName: 'Maya', lastName: 'Patel', email: 'math@school.com' },
+  { firstName: 'Sam', lastName: 'Cohen', email: 'social@school.com' },
+  { firstName: 'Priya', lastName: 'Sharma', email: 'hindi@school.com' },
+  { firstName: 'Chen', lastName: 'Wei', email: 'chemistry@school.com' },
+  { firstName: 'Nora', lastName: 'Ali', email: 'biology@school.com' },
+  { firstName: 'James', lastName: 'Brooks', email: 'physics@school.com' },
+  { firstName: 'Lina', lastName: 'Okada', email: 'it@school.com' },
+];
+
+const STUDENTS = [
+  { firstName: 'Alex', lastName: 'Student', email: 'student@school.com' },
+  { firstName: 'Jordan', lastName: 'Lee', email: 'jordan@school.com' },
+  { firstName: 'Casey', lastName: 'Nguyen', email: 'casey@school.com' },
+  { firstName: 'Riley', lastName: 'Garcia', email: 'riley@school.com' },
+  { firstName: 'Morgan', lastName: 'Kim', email: 'morgan@school.com' },
+  { firstName: 'Taylor', lastName: 'Singh', email: 'taylor@school.com' },
+  { firstName: 'Avery', lastName: 'Brown', email: 'avery@school.com' },
+  { firstName: 'Quinn', lastName: 'Martinez', email: 'quinn@school.com' },
+  { firstName: 'Reese', lastName: 'Patel', email: 'reese@school.com' },
+  { firstName: 'Skyler', lastName: 'Chen', email: 'skyler@school.com' },
+  { firstName: 'Jamie', lastName: 'Wilson', email: 'jamie@school.com' },
+  { firstName: 'Cameron', lastName: 'Davis', email: 'cameron@school.com' },
+  { firstName: 'Drew', lastName: 'Lopez', email: 'drew@school.com' },
+  { firstName: 'Blake', lastName: 'Ahmed', email: 'blake@school.com' },
+  { firstName: 'Finley', lastName: 'Ross', email: 'finley@school.com' },
+];
+
 async function main() {
-  console.log('Seeding database...');
+  console.log('Clearing database...');
 
   await prisma.message.deleteMany();
   await prisma.leaveRequest.deleteMany();
   await prisma.assignmentSubmission.deleteMany();
+  await prisma.assignmentRead.deleteMany();
   await prisma.assignment.deleteMany();
   await prisma.fee.deleteMany();
   await prisma.grade.deleteMany();
   await prisma.attendance.deleteMany();
+  await prisma.postRead.deleteMany();
   await prisma.postTarget.deleteMany();
   await prisma.post.deleteMany();
   await prisma.studentProfile.deleteMany();
@@ -20,25 +66,22 @@ async function main() {
   await prisma.user.deleteMany();
   await prisma.schoolClass.deleteMany();
 
+  console.log('Seeding database...');
+
   const password = await bcrypt.hash('password123', 10);
 
   const classA = await prisma.schoolClass.create({
-    data: {
-      name: '10',
-      section: 'A',
-      academicYear: '2025-26',
-    },
+    data: { name: '10', section: 'A', academicYear: '2025-26' },
   });
-
   const classB = await prisma.schoolClass.create({
-    data: {
-      name: '9',
-      section: 'B',
-      academicYear: '2025-26',
-    },
+    data: { name: '10', section: 'B', academicYear: '2025-26' },
   });
+  const classC = await prisma.schoolClass.create({
+    data: { name: '10', section: 'C', academicYear: '2025-26' },
+  });
+  const classes = [classA, classB, classC];
 
-  const admin = await prisma.user.create({
+  await prisma.user.create({
     data: {
       email: 'admin@school.com',
       password,
@@ -48,265 +91,75 @@ async function main() {
     },
   });
 
-  const staff = await prisma.user.create({
-    data: {
-      email: 'staff@school.com',
-      password,
-      firstName: 'Sam',
-      lastName: 'Teacher',
-      role: UserRole.STAFF,
-      staffProfile: {
-        create: {
-          employeeId: 'EMP001',
-          department: 'Science',
-          subject: 'PHYSICS',
-          assignedClassId: classA.id,
-          phone: '555-0100',
+  // First 3 staff are class teachers for 10-A, 10-B, 10-C
+  const classTeacherIds = [classA.id, classB.id, classC.id];
+
+  for (let i = 0; i < STAFF.length; i++) {
+    const person = STAFF[i];
+    const subject = SUBJECTS[i];
+    await prisma.user.create({
+      data: {
+        email: person.email,
+        password,
+        firstName: person.firstName,
+        lastName: person.lastName,
+        role: UserRole.STAFF,
+        staffProfile: {
+          create: {
+            employeeId: `EMP${String(i + 1).padStart(3, '0')}`,
+            department: subject.replaceAll('_', ' '),
+            subject,
+            assignedClassId: i < 3 ? classTeacherIds[i] : null,
+            phone: `555-01${String(i).padStart(2, '0')}`,
+            ...(i < 3
+              ? {
+                  classAssignments: {
+                    create: { schoolClassId: classTeacherIds[i] },
+                  },
+                }
+              : {}),
+          },
         },
       },
-    },
-  });
+    });
+  }
 
-  const mathStaff = await prisma.user.create({
-    data: {
-      email: 'math@school.com',
-      password,
-      firstName: 'Maya',
-      lastName: 'Math',
-      role: UserRole.STAFF,
-      staffProfile: {
-        create: {
-          employeeId: 'EMP002',
-          department: 'Mathematics',
-          subject: 'MATHEMATICS',
-          assignedClassId: classB.id,
-          phone: '555-0101',
+  for (let i = 0; i < STUDENTS.length; i++) {
+    const person = STUDENTS[i];
+    const schoolClass = classes[i % 3];
+    await prisma.user.create({
+      data: {
+        email: person.email,
+        password,
+        firstName: person.firstName,
+        lastName: person.lastName,
+        role: UserRole.STUDENT,
+        studentProfile: {
+          create: {
+            studentId: `STU${String(i + 1).padStart(3, '0')}`,
+            schoolClassId: schoolClass.id,
+            parentName: `${person.lastName} Parent`,
+            parentPhone: `555-02${String(i).padStart(2, '0')}`,
+          },
         },
       },
-    },
-  });
-
-  const student1 = await prisma.user.create({
-    data: {
-      email: 'student@school.com',
-      password,
-      firstName: 'Alex',
-      lastName: 'Student',
-      role: UserRole.STUDENT,
-      studentProfile: {
-        create: {
-          studentId: 'STU001',
-          schoolClassId: classA.id,
-          parentName: 'Pat Parent',
-          parentPhone: '555-0200',
-          address: '12 Maple Street',
-        },
-      },
-    },
-  });
-
-  const student2 = await prisma.user.create({
-    data: {
-      email: 'jordan@school.com',
-      password,
-      firstName: 'Jordan',
-      lastName: 'Lee',
-      role: UserRole.STUDENT,
-      studentProfile: {
-        create: {
-          studentId: 'STU002',
-          schoolClassId: classA.id,
-          parentName: 'Kim Lee',
-          parentPhone: '555-0300',
-        },
-      },
-    },
-  });
-
-  const student3 = await prisma.user.create({
-    data: {
-      email: 'casey@school.com',
-      password,
-      firstName: 'Casey',
-      lastName: 'Nguyen',
-      role: UserRole.STUDENT,
-      studentProfile: {
-        create: {
-          studentId: 'STU003',
-          schoolClassId: classB.id,
-          parentName: 'Taylor Nguyen',
-        },
-      },
-    },
-  });
-
-  await prisma.post.create({
-    data: {
-      title: 'Welcome to the new term',
-      content:
-        'Welcome everyone! Please check your schedules and fee dues this week.',
-      audience: 'ALL',
-      authorId: admin.id,
-    },
-  });
-
-  await prisma.post.create({
-    data: {
-      title: 'Grade 10 Science Fair',
-      content: 'Science fair submissions are due next Friday for Grade 10-A.',
-      audience: 'CLASS',
-      targetClassId: classA.id,
-      authorId: admin.id,
-    },
-  });
-
-  await prisma.post.create({
-    data: {
-      title: 'Staff meeting Friday',
-      content: 'All staff: curriculum planning meeting at 3 PM in the library.',
-      audience: 'STAFF',
-      authorId: admin.id,
-    },
-  });
-
-  const today = new Date();
-  today.setUTCHours(0, 0, 0, 0);
-
-  await prisma.attendance.createMany({
-    data: [
-      {
-        studentId: student1.id,
-        schoolClassId: classA.id,
-        date: today,
-        status: AttendanceStatus.PRESENT,
-        markedById: staff.id,
-      },
-      {
-        studentId: student2.id,
-        schoolClassId: classA.id,
-        date: today,
-        status: AttendanceStatus.LATE,
-        markedById: staff.id,
-        remarks: 'Arrived 10 minutes late',
-      },
-    ],
-  });
-
-  await prisma.grade.createMany({
-    data: [
-      {
-        studentId: student1.id,
-        subject: 'PHYSICS',
-        examName: 'Term Assessment',
-        score: 88,
-        maxScore: 100,
-        gradeLetter: 'A',
-        recordedById: staff.id,
-      },
-      {
-        studentId: student2.id,
-        subject: 'PHYSICS',
-        examName: 'Term Assessment',
-        score: 76,
-        maxScore: 100,
-        gradeLetter: 'C',
-        recordedById: staff.id,
-      },
-      {
-        studentId: student3.id,
-        subject: 'MATHEMATICS',
-        examName: 'Term Assessment',
-        score: 81,
-        maxScore: 100,
-        gradeLetter: 'B',
-        recordedById: mathStaff.id,
-      },
-    ],
-  });
-
-  await prisma.fee.createMany({
-    data: [
-      {
-        studentId: student1.id,
-        title: 'Tuition - Term 1',
-        description: 'Term 1 tuition fee',
-        amount: 1500,
-        amountPaid: 500,
-        status: FeeStatus.PARTIAL,
-        dueDate: new Date('2026-04-01'),
-        createdById: admin.id,
-      },
-      {
-        studentId: student1.id,
-        title: 'Lab Fee',
-        amount: 120,
-        amountPaid: 120,
-        status: FeeStatus.PAID,
-        paidAt: new Date(),
-        createdById: admin.id,
-      },
-      {
-        studentId: student2.id,
-        title: 'Tuition - Term 1',
-        amount: 1500,
-        amountPaid: 0,
-        status: FeeStatus.PENDING,
-        dueDate: new Date('2026-04-01'),
-        createdById: admin.id,
-      },
-    ],
-  });
-
-  const assignment = await prisma.assignment.create({
-    data: {
-      title: 'Newton Laws Worksheet',
-      description: 'Complete questions 1-10 from chapter 3.',
-      subject: 'Physics',
-      dueDate: new Date('2026-04-15'),
-      schoolClassId: classA.id,
-      createdById: staff.id,
-      maxScore: 50,
-    },
-  });
-
-  await prisma.assignmentSubmission.create({
-    data: {
-      assignmentId: assignment.id,
-      studentId: student1.id,
-      content: 'Attached answers for questions 1-10.',
-      score: 45,
-      isGraded: true,
-      status: 'APPROVED',
-      attemptCount: 1,
-    },
-  });
-
-  await prisma.leaveRequest.create({
-    data: {
-      requesterId: student2.id,
-      reason: 'Family event',
-      startDate: new Date('2026-04-10'),
-      endDate: new Date('2026-04-11'),
-      status: 'PENDING',
-    },
-  });
-
-  await prisma.message.create({
-    data: {
-      senderId: staff.id,
-      receiverId: student1.id,
-      subject: 'Lab report reminder',
-      body: 'Please submit your lab report by Thursday.',
-    },
-  });
+    });
+  }
 
   console.log('Seed complete.');
+  console.log('');
   console.log('Demo logins (password: password123):');
-  console.log('  admin@school.com');
-  console.log('  staff@school.com (Physics · 10-A)');
-  console.log('  math@school.com (Mathematics · 9-B)');
-  console.log('  Tip: assign one teacher per subject to a class; toppers need all 10 subjects.');
-  console.log('  student@school.com');
+  console.log('  Admin:  admin@school.com');
+  console.log('  Classes: 10-A, 10-B, 10-C');
+  console.log('  Class teachers:');
+  console.log('    arabic@school.com  → 10-A (ARABIC)');
+  console.log('    english@school.com → 10-B (ENGLISH)');
+  console.log('    malayalam@school.com → 10-C (MALAYALAM)');
+  console.log('  Other staff (subject only, no class):');
+  for (let i = 3; i < STAFF.length; i++) {
+    console.log(`    ${STAFF[i].email} (${SUBJECTS[i]})`);
+  }
+  console.log('  Students: 15 (5 per class) — student@school.com … finley@school.com');
 }
 
 main()

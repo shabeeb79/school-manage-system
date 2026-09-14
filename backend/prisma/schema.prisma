@@ -90,6 +90,8 @@ model User {
   messagesSent           Message[]              @relation("MessageSender")
   messagesReceived       Message[]              @relation("MessageReceiver")
   postTargets            PostTarget[]
+  postReads              PostRead[]
+  assignmentReads        AssignmentRead[]
 
   @@map("users")
 }
@@ -101,11 +103,12 @@ model SchoolClass {
   academicYear String?
   createdAt    DateTime @default(now())
 
-  students    StudentProfile[]
-  staff       StaffProfile[]
-  posts       Post[]
-  attendance  Attendance[]
-  assignments Assignment[]
+  students         StudentProfile[]
+  staff            StaffProfile[]
+  classAssignments StaffClassAssignment[]
+  posts            Post[]
+  attendance       Attendance[]
+  assignments      Assignment[]
 
   @@map("classes")
 }
@@ -135,13 +138,28 @@ model StaffProfile {
   subject         TeachingSubject?
   phone           String?
   userId          String           @unique
+  /// Homeroom / class-teacher class (attendance + student leave). Optional.
   assignedClassId String?
   createdAt       DateTime         @default(now())
 
-  user          User         @relation(fields: [userId], references: [id], onDelete: Cascade)
-  assignedClass SchoolClass? @relation(fields: [assignedClassId], references: [id], onDelete: SetNull)
+  user             User                   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  assignedClass    SchoolClass?           @relation(fields: [assignedClassId], references: [id], onDelete: SetNull)
+  classAssignments StaffClassAssignment[]
 
   @@map("staff_profiles")
+}
+
+model StaffClassAssignment {
+  id             String   @id @default(uuid())
+  staffProfileId String
+  schoolClassId  String
+  createdAt      DateTime @default(now())
+
+  staffProfile StaffProfile @relation(fields: [staffProfileId], references: [id], onDelete: Cascade)
+  schoolClass  SchoolClass  @relation(fields: [schoolClassId], references: [id], onDelete: Cascade)
+
+  @@unique([staffProfileId, schoolClassId])
+  @@map("staff_class_assignments")
 }
 
 model Post {
@@ -160,8 +178,23 @@ model Post {
   author      User         @relation("PostAuthor", fields: [authorId], references: [id], onDelete: Cascade)
   targetClass SchoolClass? @relation(fields: [targetClassId], references: [id], onDelete: SetNull)
   targets     PostTarget[]
+  reads       PostRead[]
 
   @@map("posts")
+}
+
+model PostRead {
+  id     String   @id @default(uuid())
+  postId String
+  userId String
+  readAt DateTime @default(now())
+
+  post Post @relation(fields: [postId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([postId, userId])
+  @@index([userId])
+  @@map("post_reads")
 }
 
 model PostTarget {
@@ -249,8 +282,23 @@ model Assignment {
   schoolClass SchoolClass            @relation(fields: [schoolClassId], references: [id], onDelete: Cascade)
   createdBy   User                   @relation("AssignmentCreator", fields: [createdById], references: [id], onDelete: Cascade)
   submissions AssignmentSubmission[]
+  reads       AssignmentRead[]
 
   @@map("assignments")
+}
+
+model AssignmentRead {
+  id           String   @id @default(uuid())
+  assignmentId String
+  userId       String
+  readAt       DateTime @default(now())
+
+  assignment Assignment @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
+  user       User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([assignmentId, userId])
+  @@index([userId])
+  @@map("assignment_reads")
 }
 
 model AssignmentSubmission {
@@ -294,17 +342,29 @@ model LeaveRequest {
   @@map("leave_requests")
 }
 
+enum MessageKind {
+  TEXT
+  VOICE
+  PHOTO
+}
+
 model Message {
-  id         String   @id @default(uuid())
+  id         String      @id @default(uuid())
   senderId   String
   receiverId String
-  subject    String
-  body       String
-  isRead     Boolean  @default(false)
-  createdAt  DateTime @default(now())
+  subject    String      @default("")
+  body       String      @default("")
+  kind       MessageKind @default(TEXT)
+  mediaUrl   String?
+  mediaMime  String?
+  isRead     Boolean     @default(false)
+  readAt     DateTime?
+  createdAt  DateTime    @default(now())
 
   sender   User @relation("MessageSender", fields: [senderId], references: [id], onDelete: Cascade)
   receiver User @relation("MessageReceiver", fields: [receiverId], references: [id], onDelete: Cascade)
 
+  @@index([senderId, receiverId, createdAt])
+  @@index([receiverId, isRead])
   @@map("messages")
 }

@@ -3,6 +3,13 @@ import { PassportStrategy } from '@nestjs/passport';
 import { ExtractJwt, Strategy } from 'passport-jwt';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../prisma/prisma.service';
+import { Request } from 'express';
+import { staffProfileInclude } from '../users/staff-classes';
+
+function jwtFromQuery(req: Request): string | null {
+  const token = req?.query?.token;
+  return typeof token === 'string' && token.length > 0 ? token : null;
+}
 
 @Injectable()
 export class JwtStrategy extends PassportStrategy(Strategy) {
@@ -11,7 +18,10 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     private prisma: PrismaService,
   ) {
     super({
-      jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
+      jwtFromRequest: ExtractJwt.fromExtractors([
+        ExtractJwt.fromAuthHeaderAsBearerToken(),
+        jwtFromQuery,
+      ]),
       ignoreExpiration: false,
       secretOrKey: config.get<string>('JWT_SECRET') || 'school-manage-secret',
     });
@@ -21,8 +31,8 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     const user = await this.prisma.user.findUnique({
       where: { id: payload.sub },
       include: {
-        studentProfile: true,
-        staffProfile: true,
+        studentProfile: { include: { schoolClass: true } },
+        staffProfile: { include: staffProfileInclude },
       },
     });
     if (!user || !user.isActive) return null;

@@ -1,7 +1,11 @@
-import { Injectable } from '@nestjs/common';
+import {
+  ForbiddenException,
+  Injectable,
+} from '@nestjs/common';
 import { UserRole } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { MarkAttendanceDto } from './dto/mark-attendance.dto';
+import { resolveClassTeacherClassId } from '../users/staff-classes';
 
 /** Parse YYYY-MM-DD as a calendar date (no timezone shift). */
 function parseDateOnly(value: string) {
@@ -18,9 +22,32 @@ export class AttendanceService {
   constructor(private prisma: PrismaService) {}
 
   async mark(markedById: string, dto: MarkAttendanceDto) {
+    const homeroomId = await resolveClassTeacherClassId(this.prisma, markedById);
+    if (!homeroomId) {
+      throw new ForbiddenException(
+        'Only class teachers can mark attendance',
+      );
+    }
+
+    const schoolClassId = dto.schoolClassId ?? homeroomId;
+    if (schoolClassId !== homeroomId) {
+      throw new ForbiddenException(
+        'You can only mark attendance for your class-teacher class',
+      );
+    }
+
+    const classStudents = await this.prisma.studentProfile.findMany({
+      where: { schoolClassId },
+      select: { userId: true },
+    });
+    const allowed = new Set(classStudents.map((s) => s.userId));
+
     const date = parseDateOnly(dto.date);
     const results = [];
     for (const entry of dto.entries) {
+      if (!allowed.has(entry.studentId)) {
+        continue;
+      }
       const record = await this.prisma.attendance.upsert({
         where: {
           studentId_date: { studentId: entry.studentId, date },
@@ -30,13 +57,13 @@ export class AttendanceService {
           date,
           status: entry.status,
           remarks: entry.remarks,
-          schoolClassId: dto.schoolClassId,
+          schoolClassId,
           markedById,
         },
         update: {
           status: entry.status,
           remarks: entry.remarks,
-          schoolClassId: dto.schoolClassId,
+          schoolClassId,
           markedById,
         },
         include: {
@@ -67,18 +94,24 @@ export class AttendanceService {
     } else if (params.studentId) {
       where.studentId = params.studentId;
     } else if (params.role === UserRole.STAFF) {
-      const staff = await this.prisma.staffProfile.findUnique({
-        where: { userId: params.userId },
-      });
-      if (staff?.assignedClassId) {
+      const homeroomId = await resolveClassTeacherClassId(
+        this.prisma,
+        params.userId,
+      );
+      if (!homeroomId) {
+        where.schoolClassId = '__none__';
+      } else if (params.schoolClassId && params.schoolClassId !== homeroomId) {
+        throw new ForbiddenException(
+          'You can only view attendance for your class-teacher class',
+        );
+      } else {
         const classStudents = await this.prisma.studentProfile.findMany({
-          where: { schoolClassId: staff.assignedClassId },
+          where: { schoolClassId: homeroomId },
           select: { userId: true },
         });
         const studentIds = classStudents.map((s) => s.userId);
-        // Match by class id OR by students in the assigned class (covers older rows)
         where.OR = [
-          { schoolClassId: staff.assignedClassId },
+          { schoolClassId: homeroomId },
           ...(studentIds.length ? [{ studentId: { in: studentIds } }] : []),
         ];
       }

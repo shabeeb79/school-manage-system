@@ -3,7 +3,6 @@ import {
   CalendarOff,
   Check,
   ChevronDown,
-  ChevronLeft,
   ClipboardCheck,
   GraduationCap,
   Image,
@@ -12,12 +11,10 @@ import {
   Menu,
   MessageSquare,
   LogOut,
-  Paperclip,
   Pencil,
   Plus,
   School,
   Search,
-  Send,
   Trash2,
   Users,
   Video,
@@ -26,6 +23,8 @@ import {
 import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react';
 import { useAuth } from './auth/AuthContext';
 import api from './api/client';
+import MessagesChat from './components/MessagesChat';
+import NotificationBell from './components/NotificationBell';
 import {
   apiErrorMessage,
   formatLeaveDates,
@@ -41,6 +40,11 @@ import {
   type TeachingSubject,
 } from './lib/subjects';
 import { MAX_MEDIA_BYTES, mediaUrl } from './lib/media';
+import { startPortalNotifications } from './lib/notifications';
+import {
+  formatUnreadBadge,
+  type UnreadCounts,
+} from './lib/unread';
 import {
   Avatar,
   Badge,
@@ -123,14 +127,20 @@ type ApiUser = {
   studentProfile?: {
     studentId: string;
     enrollmentDate?: string | null;
+    parentPhone?: string | null;
     schoolClassId?: string | null;
     schoolClass?: { id: string; name: string; section?: string | null } | null;
   } | null;
   staffProfile?: {
     employeeId: string;
     subject?: string | null;
+    phone?: string | null;
     assignedClassId?: string | null;
     assignedClass?: { id: string; name: string; section?: string | null } | null;
+    classAssignments?: Array<{
+      schoolClassId: string;
+      schoolClass?: { id: string; name: string; section?: string | null } | null;
+    }> | null;
   } | null;
 };
 
@@ -142,12 +152,15 @@ type UserFormState = {
   lastName: string;
   email: string;
   password: string;
+  phone: string;
   studentId: string;
   schoolClassId: string;
   enrollmentDate: string;
   teacherName: string;
   employeeId: string;
   subject: string;
+  assignedClassIds: string[];
+  /** Class-teacher / homeroom class (must be one of assignedClassIds). */
   assignedClassId: string;
 };
 
@@ -157,12 +170,14 @@ const EMPTY_USER_FORM: UserFormState = {
   lastName: '',
   email: '',
   password: '',
+  phone: '',
   studentId: '',
   schoolClassId: '',
   enrollmentDate: '',
   teacherName: '',
   employeeId: '',
   subject: '',
+  assignedClassIds: [],
   assignedClassId: '',
 };
 
@@ -186,108 +201,6 @@ const ACTIVITY = [
   { name: 'Fathima Beevi', action: 'entered English grades for Grade 10 - A', time: '2 hr ago' },
   { name: 'Rahul Varma', action: 'submitted Climate change essay', time: '3 hr ago' },
   { name: 'Divya Menon', action: 'approved leave for Arjun Nair', time: '5 hr ago' },
-];
-
-type ChatMessage = { id: string; from: 'in' | 'out'; text: string; time: string };
-type Thread = {
-  id: string;
-  name: string;
-  role: string;
-  preview: string;
-  time: string;
-  unread: boolean;
-  messages: ChatMessage[];
-};
-
-const INITIAL_THREADS: Thread[] = [
-  {
-    id: 't1',
-    name: 'Kavya Menon',
-    role: 'Teacher · Grade 8 - A',
-    preview: 'Perfect, thank you.',
-    time: '10:24 AM',
-    unread: true,
-    messages: [
-      {
-        id: 'm1',
-        from: 'in',
-        text: 'Good morning. Could we move the Grade 8 PTM to Friday afternoon? Several parents have asked.',
-        time: '10:02 AM',
-      },
-      {
-        id: 'm2',
-        from: 'out',
-        text: 'Friday 2:30 PM should work. I’ll send a note on the feed.',
-        time: '10:18 AM',
-      },
-      { id: 'm3', from: 'in', text: 'Perfect, thank you.', time: '10:24 AM' },
-    ],
-  },
-  {
-    id: 't2',
-    name: 'Suresh Pillai',
-    role: 'Teacher · Grade 9 - B',
-    preview: 'Grade 9-B science lab is booked for Thursday.',
-    time: '9:15 AM',
-    unread: true,
-    messages: [
-      {
-        id: 'm4',
-        from: 'in',
-        text: 'Grade 9-B science lab is booked for Thursday. Sharing the slot list shortly.',
-        time: '9:15 AM',
-      },
-    ],
-  },
-  {
-    id: 't3',
-    name: 'Meera Krishnan',
-    role: 'Parent · Rahul Varma',
-    preview: 'Rahul will be late tomorrow — dentist visit.',
-    time: 'Yesterday',
-    unread: false,
-    messages: [
-      {
-        id: 'm5',
-        from: 'in',
-        text: 'Rahul will be late tomorrow — dentist visit. He should reach by second period.',
-        time: 'Yesterday',
-      },
-      { id: 'm6', from: 'out', text: 'Noted, Meera. I’ll inform Kavya.', time: 'Yesterday' },
-    ],
-  },
-  {
-    id: 't4',
-    name: 'Fathima Beevi',
-    role: 'Teacher · Grade 10 - A',
-    preview: 'Leave request attached for 25–26 Sep.',
-    time: 'Yesterday',
-    unread: false,
-    messages: [
-      {
-        id: 'm7',
-        from: 'in',
-        text: 'Leave request attached for 25–26 Sep. Cover period notes are with Priya.',
-        time: 'Yesterday',
-      },
-    ],
-  },
-  {
-    id: 't5',
-    name: 'Ananya Iyer',
-    role: 'Parent',
-    preview: 'Could you share the Term 2 fee receipt?',
-    time: 'Mon',
-    unread: false,
-    messages: [
-      {
-        id: 'm8',
-        from: 'in',
-        text: 'Could you share the Term 2 fee receipt? The office copy hasn’t reached us yet.',
-        time: 'Mon',
-      },
-    ],
-  },
 ];
 
 function DashboardPage() {
@@ -836,8 +749,8 @@ function UserFormModal({
     'mt-1.5 h-10 w-full rounded-lg border border-gray-200 px-3 text-sm text-gray-900 placeholder:text-gray-400 focus:border-blue-600 focus:outline-none focus:ring-1 focus:ring-blue-600';
 
   return (
-    <Modal onClose={onClose} size="lg">
-      <div className="mb-3 flex items-start justify-between gap-3 sm:mb-4">
+    <Modal onClose={onClose} size="md">
+      <div className="sticky top-0 z-10 -mx-1 mb-3 flex items-start justify-between gap-3 bg-white px-1 pb-2 sm:mb-4">
         <div className="min-w-0">
           <h2 className="text-base font-semibold text-gray-900 sm:text-lg">
             {mode === 'add' ? 'Add user' : `Edit ${displayRole(form.role).toLowerCase()}`}
@@ -936,6 +849,19 @@ function UserFormModal({
           )}
         </div>
 
+        {(form.role === 'STUDENT' || form.role === 'STAFF') && (
+          <label className="block text-sm text-gray-700">
+            {form.role === 'STUDENT' ? 'Parent phone' : 'Phone number'}
+            <input
+              type="tel"
+              value={form.phone}
+              onChange={(event) => onChange({ ...form, phone: event.target.value })}
+              placeholder="9876543210"
+              className={inputClass}
+            />
+          </label>
+        )}
+
         {form.role === 'STUDENT' && (
           <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 sm:gap-3">
             <label className="block text-sm text-gray-700">
@@ -1007,19 +933,96 @@ function UserFormModal({
                 ))}
               </select>
             </label>
+            <div className="sm:col-span-2">
+              <label className="block text-sm text-gray-700">
+                Assigned classes (subject teaching)
+                <p className="mt-1 text-xs font-normal text-gray-500">
+                  Select a class from the dropdown to add it. You can add more than one.
+                </p>
+                <select
+                  value=""
+                  onChange={(event) => {
+                    const classId = event.target.value;
+                    if (!classId || form.assignedClassIds.includes(classId)) return;
+                    onChange({
+                      ...form,
+                      assignedClassIds: [...form.assignedClassIds, classId],
+                    });
+                  }}
+                  className={inputClass}
+                >
+                  <option value="">
+                    {classes.filter((c) => !form.assignedClassIds.includes(c.id)).length
+                      ? 'Add a class…'
+                      : classes.length
+                        ? 'All classes added'
+                        : 'No classes available'}
+                  </option>
+                  {classes
+                    .filter((item) => !form.assignedClassIds.includes(item.id))
+                    .map((item) => (
+                      <option key={item.id} value={item.id}>
+                        {formatClassLabel(item.name, item.section)}
+                      </option>
+                    ))}
+                </select>
+              </label>
+              {form.assignedClassIds.length > 0 && (
+                <ul className="mt-2 flex flex-wrap gap-2">
+                  {form.assignedClassIds.map((classId) => {
+                    const item = classes.find((c) => c.id === classId);
+                    const label = item
+                      ? formatClassLabel(item.name, item.section)
+                      : classId;
+                    return (
+                      <li
+                        key={classId}
+                        className="inline-flex items-center gap-1 rounded-lg border border-gray-200 bg-gray-50 py-1 pl-2.5 pr-1 text-sm text-gray-800"
+                      >
+                        <span>{label}</span>
+                        <button
+                          type="button"
+                          aria-label={`Remove ${label}`}
+                          onClick={() => {
+                            const next = form.assignedClassIds.filter((id) => id !== classId);
+                            onChange({
+                              ...form,
+                              assignedClassIds: next,
+                              assignedClassId: next.includes(form.assignedClassId)
+                                ? form.assignedClassId
+                                : '',
+                            });
+                          }}
+                          className="inline-flex h-6 w-6 items-center justify-center rounded-md text-gray-500 hover:bg-gray-200 hover:text-gray-800"
+                        >
+                          <X className="h-3.5 w-3.5" />
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </div>
             <label className="block text-sm text-gray-700 sm:col-span-2">
-              Class
+              Class teacher of
+              <p className="mt-1 text-xs font-normal text-gray-500">
+                Optional. Homeroom class for attendance and student leave only
+              </p>
               <select
                 value={form.assignedClassId}
-                onChange={(event) => onChange({ ...form, assignedClassId: event.target.value })}
+                onChange={(event) =>
+                  onChange({ ...form, assignedClassId: event.target.value })
+                }
                 className={inputClass}
               >
-                <option value="">No class assigned</option>
-                {classes.map((item) => (
-                  <option key={item.id} value={item.id}>
-                    {formatClassLabel(item.name, item.section)}
-                  </option>
-                ))}
+                <option value="">Not a class teacher</option>
+                {classes
+                  .filter((item) => form.assignedClassIds.includes(item.id))
+                  .map((item) => (
+                    <option key={item.id} value={item.id}>
+                      {formatClassLabel(item.name, item.section)}
+                    </option>
+                  ))}
               </select>
             </label>
           </div>
@@ -1122,6 +1125,10 @@ function UsersPage() {
       lastName: user.lastName,
       email: user.email,
       password: '',
+      phone:
+        user.role === 'STUDENT'
+          ? (user.studentProfile?.parentPhone ?? '')
+          : (user.staffProfile?.phone ?? ''),
       studentId: user.studentProfile?.studentId ?? '',
       schoolClassId: classId,
       enrollmentDate: toDateInput(
@@ -1130,6 +1137,16 @@ function UsersPage() {
       teacherName: `${user.firstName} ${user.lastName}`.trim(),
       employeeId: user.staffProfile?.employeeId ?? '',
       subject: (user.staffProfile?.subject as TeachingSubject | undefined) ?? '',
+      assignedClassIds: (() => {
+        const fromJoin = (user.staffProfile?.classAssignments ?? [])
+          .map((row) => row.schoolClass?.id || row.schoolClassId)
+          .filter(Boolean) as string[];
+        if (fromJoin.length) return [...new Set(fromJoin)];
+        const single =
+          user.staffProfile?.assignedClassId ||
+          user.staffProfile?.assignedClass?.id;
+        return single ? [single] : [];
+      })(),
       assignedClassId:
         user.staffProfile?.assignedClassId ||
         user.staffProfile?.assignedClass?.id ||
@@ -1184,6 +1201,7 @@ function UsersPage() {
             studentId: form.studentId.trim(),
             schoolClassId: form.schoolClassId || undefined,
             enrollmentDate: form.enrollmentDate || undefined,
+            parentPhone: form.phone.trim() || undefined,
           });
         } else if (form.role === 'STAFF') {
           const names = splitTeacherName(form.teacherName);
@@ -1195,7 +1213,9 @@ function UsersPage() {
             password: form.password,
             employeeId: form.employeeId.trim(),
             subject: form.subject.trim(),
+            assignedClassIds: form.assignedClassIds,
             assignedClassId: form.assignedClassId || undefined,
+            phone: form.phone.trim() || undefined,
           });
         } else {
           await api.post('/auth/register', {
@@ -1214,6 +1234,7 @@ function UsersPage() {
             studentId: form.studentId.trim(),
             schoolClassId: form.schoolClassId || undefined,
             enrollmentDate: form.enrollmentDate || undefined,
+            parentPhone: form.phone.trim() || null,
           });
         } else if (form.role === 'STAFF') {
           const names = splitTeacherName(form.teacherName);
@@ -1223,7 +1244,9 @@ function UsersPage() {
             email: form.email.trim(),
             employeeId: form.employeeId.trim(),
             subject: form.subject.trim(),
+            assignedClassIds: form.assignedClassIds,
             assignedClassId: form.assignedClassId || null,
+            phone: form.phone.trim() || null,
           });
         } else {
           await api.patch(`/users/admins/${editingUserId}`, {
@@ -1399,9 +1422,14 @@ type ApiClass = {
   name: string;
   section: string;
   academicYear?: string | null;
-  _count?: { students: number; staff: number };
+  _count?: { students: number; staff: number; classAssignments?: number };
   staff?: Array<{
     user: { firstName: string; lastName: string };
+  }>;
+  classAssignments?: Array<{
+    staffProfile?: {
+      user: { firstName: string; lastName: string };
+    };
   }>;
 };
 
@@ -1418,6 +1446,15 @@ const EMPTY_CLASS_FORM: ClassFormState = {
 };
 
 function classTeacherNames(item: ApiClass) {
+  const fromAssignments = (item.classAssignments ?? [])
+    .map((row) => {
+      const u = row.staffProfile?.user;
+      return u ? `${u.firstName} ${u.lastName}`.trim() : '';
+    })
+    .filter(Boolean);
+  if (fromAssignments.length) {
+    return [...new Set(fromAssignments)].join(', ');
+  }
   const names = (item.staff ?? [])
     .map((s) => `${s.user.firstName} ${s.user.lastName}`.trim())
     .filter(Boolean);
@@ -2396,179 +2433,21 @@ function LeavePage() {
   );
 }
 
-function MessagesPage() {
-  const [threads, setThreads] = useState(INITIAL_THREADS);
-  const [activeId, setActiveId] = useState(INITIAL_THREADS[0].id);
-  const [mobileShowChat, setMobileShowChat] = useState(false);
-  const [draft, setDraft] = useState('');
-  const [threadQuery, setThreadQuery] = useState('');
-
-  const active = threads.find((thread) => thread.id === activeId) ?? threads[0];
-  const visibleThreads = threads.filter((thread) =>
-    thread.name.toLowerCase().includes(threadQuery.toLowerCase()),
-  );
-
-  const openThread = (id: string) => {
-    setActiveId(id);
-    setMobileShowChat(true);
-    setThreads((current) =>
-      current.map((thread) => (thread.id === id ? { ...thread, unread: false } : thread)),
-    );
-  };
-
-  const sendMessage = () => {
-    const text = draft.trim();
-    if (!text) return;
-    const message: ChatMessage = {
-      id: `out-${Date.now()}`,
-      from: 'out',
-      text,
-      time: 'Just now',
-    };
-    setThreads((current) =>
-      current.map((thread) =>
-        thread.id === active.id
-          ? { ...thread, preview: text, time: 'Just now', unread: false, messages: [...thread.messages, message] }
-          : thread,
-      ),
-    );
-    setDraft('');
-  };
-
+function MessagesPage({
+  onUnreadChange,
+}: {
+  onUnreadChange?: (count: number) => void;
+}) {
   return (
-    <>
-      <SectionHeader title="Messages" subtitle="Internal inbox with staff and parents" />
-      <Card className="flex h-[calc(100dvh-11.5rem)] overflow-hidden md:h-[480px]">
-        <div
-          className={cn(
-            'w-full shrink-0 flex-col border-gray-200 md:flex md:w-72 md:border-r',
-            mobileShowChat ? 'hidden md:flex' : 'flex',
-          )}
-        >
-          <div className="border-b border-gray-200 p-3">
-            <div className="relative">
-              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
-              <input
-                value={threadQuery}
-                onChange={(event) => setThreadQuery(event.target.value)}
-                placeholder="Search conversations"
-                className="h-10 w-full rounded-lg border border-gray-200 bg-gray-50 py-2 pl-9 pr-3 text-sm placeholder:text-gray-400 focus:border-blue-600 focus:bg-white focus:outline-none focus:ring-1 focus:ring-blue-600"
-              />
-            </div>
-          </div>
-          <ul className="flex-1 overflow-y-auto">
-            {visibleThreads.map((thread) => (
-              <li key={thread.id}>
-                <button
-                  type="button"
-                  onClick={() => openThread(thread.id)}
-                  className={cn(
-                    'flex w-full items-start gap-3 px-3 py-3 text-left hover:bg-gray-50',
-                    thread.id === active.id && 'bg-blue-50 hover:bg-blue-50',
-                  )}
-                >
-                  <Avatar name={thread.name} />
-                  <span className="min-w-0 flex-1">
-                    <span className="flex items-center justify-between gap-2">
-                      <span
-                        className={cn(
-                          'truncate text-sm',
-                          thread.unread ? 'font-bold text-gray-900' : 'font-medium text-gray-900',
-                        )}
-                      >
-                        {thread.name}
-                      </span>
-                      <span className="shrink-0 text-xs text-gray-400">{thread.time}</span>
-                    </span>
-                    <span
-                      className={cn(
-                        'mt-0.5 block truncate text-xs',
-                        thread.unread ? 'font-semibold text-gray-700' : 'text-gray-400',
-                      )}
-                    >
-                      {thread.preview}
-                    </span>
-                  </span>
-                </button>
-              </li>
-            ))}
-          </ul>
-        </div>
-
-        <div
-          className={cn(
-            'min-w-0 flex-1 flex-col',
-            mobileShowChat ? 'flex' : 'hidden md:flex',
-          )}
-        >
-          <div className="flex items-center gap-2 border-b border-gray-200 px-3 py-3 md:px-4">
-            <IconButton
-              label="Back to conversations"
-              onClick={() => setMobileShowChat(false)}
-              className="md:hidden"
-            >
-              <ChevronLeft className="h-5 w-5" />
-            </IconButton>
-            <Avatar name={active.name} />
-            <div className="min-w-0">
-              <p className="truncate font-semibold text-gray-900">{active.name}</p>
-              <p className="truncate text-xs text-gray-400">{active.role}</p>
-            </div>
-          </div>
-          <div className="flex-1 space-y-3 overflow-y-auto bg-gray-50 px-3 py-4 md:px-4">
-            {active.messages.map((message) => (
-              <div
-                key={message.id}
-                className={cn('flex', message.from === 'out' ? 'justify-end' : 'justify-start')}
-              >
-                <div
-                  className={cn(
-                    'max-w-[80%] px-3 py-2 text-sm',
-                    message.from === 'out'
-                      ? 'rounded-2xl rounded-br-md bg-blue-600 text-white'
-                      : 'rounded-2xl rounded-bl-md border border-gray-200 bg-white text-gray-900',
-                  )}
-                >
-                  <p>{message.text}</p>
-                  <p
-                    className={cn(
-                      'mt-1 text-[11px]',
-                      message.from === 'out' ? 'text-blue-100' : 'text-gray-400',
-                    )}
-                  >
-                    {message.time}
-                  </p>
-                </div>
-              </div>
-            ))}
-          </div>
-          <form
-            className="flex items-center gap-1 border-t border-gray-200 p-2 md:gap-2 md:p-3"
-            onSubmit={(event) => {
-              event.preventDefault();
-              sendMessage();
-            }}
-          >
-            <IconButton label="Attach file">
-              <Paperclip className="h-4 w-4" />
-            </IconButton>
-            <input
-              value={draft}
-              onChange={(event) => setDraft(event.target.value)}
-              placeholder="Write a message"
-              className="h-10 min-w-0 flex-1 rounded-lg border border-gray-200 bg-white px-3 text-sm placeholder:text-gray-400 focus:border-blue-600 focus:outline-none focus:ring-1 focus:ring-blue-600"
-            />
-            <PrimaryButton type="submit" icon={<Send className="h-4 w-4" />}>
-              Send
-            </PrimaryButton>
-          </form>
-        </div>
-      </Card>
-    </>
+    <MessagesChat
+      subtitle="Internal inbox with staff and parents"
+      variant="staff"
+      onUnreadChange={onUnreadChange}
+    />
   );
 }
 
-const PAGES: Record<PageId, () => ReactNode> = {
+const PAGES: Record<Exclude<PageId, 'messages'>, () => ReactNode> = {
   dashboard: DashboardPage,
   posts: PostsPage,
   users: UsersPage,
@@ -2576,14 +2455,17 @@ const PAGES: Record<PageId, () => ReactNode> = {
   attendance: AttendancePage,
   grades: GradesPage,
   leave: LeavePage,
-  messages: MessagesPage,
 };
 
 export default function AdminPortal() {
   const { user, logout } = useAuth();
   const [page, setPage] = useState<PageId>('dashboard');
   const [drawerOpen, setDrawerOpen] = useState(false);
-  const [searchExpanded, setSearchExpanded] = useState(false);
+  const [unread, setUnread] = useState<UnreadCounts>({
+    announcements: 0,
+    assignments: 0,
+    messages: 0,
+  });
 
   const displayName = user ? `${user.firstName} ${user.lastName}` : 'Divya Menon';
   const displayRole = user?.role === 'ADMIN' ? 'Administrator' : user?.role ?? 'Administrator';
@@ -2591,10 +2473,14 @@ export default function AdminPortal() {
   const goTo = (id: PageId) => {
     setPage(id);
     setDrawerOpen(false);
-    setSearchExpanded(false);
   };
 
-  const Page = PAGES[page];
+  useEffect(() => {
+    return startPortalNotifications({
+      includeAssignments: false,
+      onCounts: setUnread,
+    });
+  }, []);
 
   return (
     <div className="flex h-dvh overflow-hidden bg-gray-50 font-sans text-gray-900">
@@ -2626,6 +2512,8 @@ export default function AdminPortal() {
           {NAV_ITEMS.map((item) => {
             const Icon = item.icon;
             const active = page === item.id;
+            const unreadLabel =
+              item.id === 'messages' ? formatUnreadBadge(unread.messages) : null;
             return (
               <button
                 key={item.id}
@@ -2639,7 +2527,12 @@ export default function AdminPortal() {
                 )}
               >
                 <Icon className="h-[18px] w-[18px] shrink-0" />
-                {item.label}
+                <span className="min-w-0 flex-1 text-left">{item.label}</span>
+                {unreadLabel && (
+                  <span className="inline-flex min-w-[1.15rem] items-center justify-center rounded-full bg-rose-500 px-1.5 py-0.5 text-[10px] font-semibold leading-none text-white">
+                    {unreadLabel}
+                  </span>
+                )}
               </button>
             );
           })}
@@ -2660,68 +2553,47 @@ export default function AdminPortal() {
 
       <div className="flex min-w-0 flex-1 flex-col">
         <header className="flex h-16 shrink-0 items-center justify-between gap-2 border-b border-gray-200 bg-white px-3 md:gap-4 md:px-8">
-          {searchExpanded ? (
-            <div className="flex w-full items-center gap-2 md:hidden">
-              <div className="relative flex-1">
-                <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
-                <input
-                  autoFocus
-                  placeholder="Search students, staff, classes"
-                  className="h-10 w-full rounded-lg border border-gray-200 bg-gray-50 py-2 pl-9 pr-3 text-sm placeholder:text-gray-400 focus:border-blue-600 focus:bg-white focus:outline-none focus:ring-1 focus:ring-blue-600"
-                />
-              </div>
-              <IconButton label="Close search" onClick={() => setSearchExpanded(false)}>
-                <X className="h-4 w-4" />
-              </IconButton>
-            </div>
-          ) : (
-            <>
-              <div className="flex min-w-0 items-center gap-1 md:gap-0">
-                <IconButton
-                  label="Open menu"
-                  onClick={() => setDrawerOpen(true)}
-                  className="md:hidden"
-                >
-                  <Menu className="h-5 w-5" />
-                </IconButton>
-                <p className="truncate text-sm font-medium text-gray-900 md:hidden">
-                  {PAGE_LABELS[page]}
-                </p>
-                <p className="hidden text-sm text-gray-400 md:block">
-                  Admin / <span className="text-gray-900">{PAGE_LABELS[page]}</span>
-                </p>
-              </div>
-              <div className="flex items-center gap-2 md:gap-4">
-                <IconButton
-                  label="Search"
-                  onClick={() => setSearchExpanded(true)}
-                  className="md:hidden"
-                >
-                  <Search className="h-4 w-4" />
-                </IconButton>
-                <div className="relative hidden md:block">
-                  <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
-                  <input
-                    placeholder="Search students, staff, classes"
-                    className="h-9 w-64 rounded-lg border border-gray-200 bg-gray-50 py-2 pl-9 pr-3 text-sm placeholder:text-gray-400 focus:border-blue-600 focus:bg-white focus:outline-none focus:ring-1 focus:ring-blue-600"
-                  />
-                </div>
-                <button
-                  type="button"
-                  aria-label="Notifications"
-                  className="relative inline-flex h-10 w-10 items-center justify-center rounded-lg text-gray-400 hover:bg-gray-50 hover:text-gray-700"
-                >
-                  <Bell className="h-4 w-4" />
-                  <span className="absolute right-2.5 top-2.5 h-2 w-2 rounded-full bg-red-500" />
-                </button>
-                <Avatar name={displayName} size="sm" />
-              </div>
-            </>
-          )}
+          <div className="flex min-w-0 items-center gap-1 md:gap-0">
+            <IconButton
+              label="Open menu"
+              onClick={() => setDrawerOpen(true)}
+              className="md:hidden"
+            >
+              <Menu className="h-5 w-5" />
+            </IconButton>
+            <p className="truncate text-sm font-medium text-gray-900 md:hidden">
+              {PAGE_LABELS[page]}
+            </p>
+            <p className="hidden text-sm text-gray-400 md:block">
+              Admin / <span className="text-gray-900">{PAGE_LABELS[page]}</span>
+            </p>
+          </div>
+          <div className="flex items-center gap-2 md:gap-4">
+            <NotificationBell
+              tone="admin"
+              totalUnread={unread.messages + unread.announcements}
+              announcements={unread.announcements}
+              messages={unread.messages}
+              onOpenAnnouncements={() => goTo('posts')}
+              onOpenMessages={() => goTo('messages')}
+            />
+            <Avatar name={displayName} size="sm" />
+          </div>
         </header>
 
         <main className="flex-1 overflow-y-auto px-4 py-5 md:px-8 md:py-7">
-          <Page />
+          {page === 'messages' ? (
+            <MessagesPage
+              onUnreadChange={(count) =>
+                setUnread((prev) => ({ ...prev, messages: count }))
+              }
+            />
+          ) : (
+            (() => {
+              const Page = PAGES[page];
+              return <Page />;
+            })()
+          )}
         </main>
       </div>
     </div>

@@ -247,7 +247,7 @@ export function Modal({
       />
       <Card
         className={cn(
-          'relative z-10 flex w-full flex-col',
+          'relative z-10 flex w-full max-h-[min(92dvh,40rem)] flex-col overflow-hidden',
           'rounded-t-2xl border-b-0 p-4 pb-[max(1rem,env(safe-area-inset-bottom))] shadow-lg',
           'sm:rounded-xl sm:border sm:p-6 sm:pb-6',
           widths[size],
@@ -255,7 +255,9 @@ export function Modal({
         )}
       >
         <div className="mx-auto mb-3 h-1 w-10 shrink-0 rounded-full bg-gray-200 sm:hidden" aria-hidden />
-        {children}
+        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
+          {children}
+        </div>
       </Card>
     </div>
   );

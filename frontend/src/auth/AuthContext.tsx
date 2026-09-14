@@ -28,8 +28,13 @@ export interface User {
     employeeId: string;
     assignedClassId?: string;
     assignedClass?: { id: string; name: string; section?: string | null };
+    classAssignments?: Array<{
+      schoolClassId: string;
+      schoolClass?: { id: string; name: string; section?: string | null };
+    }>;
     department?: string;
     subject?: string;
+    phone?: string;
   } | null;
 }
 

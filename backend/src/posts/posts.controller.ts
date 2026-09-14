@@ -5,6 +5,7 @@ import {
   Delete,
   Get,
   Param,
+  Patch,
   Post,
   UploadedFile,
   UseGuards,
@@ -30,6 +31,16 @@ function ensureUploadDir() {
     mkdirSync(UPLOAD_DIR, { recursive: true });
   }
 }
+
+type FeedUser = {
+  id: string;
+  role: UserRole;
+  studentProfile?: { schoolClassId?: string | null } | null;
+  staffProfile?: {
+    assignedClassId?: string | null;
+    classAssignments?: { schoolClassId: string }[];
+  } | null;
+};
 
 @Controller('posts')
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -75,16 +86,18 @@ export class PostsController {
   }
 
   @Get('feed')
-  feed(
-    @CurrentUser()
-    user: {
-      id: string;
-      role: UserRole;
-      studentProfile?: { schoolClassId?: string | null } | null;
-      staffProfile?: { assignedClassId?: string | null } | null;
-    },
-  ) {
+  feed(@CurrentUser() user: FeedUser) {
     return this.posts.feed(user);
+  }
+
+  @Get('feed/unread-count')
+  unreadCount(@CurrentUser() user: FeedUser) {
+    return this.posts.unreadCount(user);
+  }
+
+  @Patch('feed/read')
+  markFeedRead(@CurrentUser() user: FeedUser) {
+    return this.posts.markFeedRead(user);
   }
 
   @Get()
