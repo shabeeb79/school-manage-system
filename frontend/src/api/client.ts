@@ -1,7 +1,7 @@
 import axios from 'axios';
 
 const api = axios.create({
-  baseURL: import.meta.env.VITE_API_URL || 'http://localhost:3001/api',
+  baseURL: import.meta.env.VITE_API_URL || 'http://localhost:3000/api',
 });
 
 api.interceptors.request.use((config) => {
@@ -16,12 +16,16 @@ api.interceptors.response.use(
   (res) => res,
   (error) => {
     if (error.response?.status === 401) {
+      const hadToken = Boolean(localStorage.getItem('token'));
       localStorage.removeItem('token');
       localStorage.removeItem('user');
-      if (window.location.pathname !== '/') {
-        window.location.href = '/';
-      } else {
-        window.location.reload();
+      // Only bounce after an expired/invalid session — not on a failed login attempt.
+      if (hadToken) {
+        if (window.location.pathname !== '/') {
+          window.location.href = '/';
+        } else {
+          window.location.reload();
+        }
       }
     }
     return Promise.reject(error);

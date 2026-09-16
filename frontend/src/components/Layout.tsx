@@ -1,7 +1,7 @@
 import { NavLink, Outlet, useNavigate } from 'react-router-dom';
-import { useAuth } from '../AuthContext';
+import { useAuth, type UserRole } from '../auth/AuthContext';
 
-const linksByRole = {
+const linksByRole: Record<UserRole, Array<{ to: string; label: string }>> = {
   ADMIN: [
     { to: '/', label: 'Dashboard' },
     { to: '/posts', label: 'Posts' },

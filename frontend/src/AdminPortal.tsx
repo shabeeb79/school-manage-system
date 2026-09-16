@@ -52,7 +52,6 @@ import {
   ConfirmModal,
   IconButton,
   Modal,
-  OverflowMenu,
   PersonCell,
   PostMedia,
   PrimaryButton,
@@ -195,31 +194,69 @@ function splitTeacherName(fullName: string) {
   return { firstName: parts[0], lastName: parts.slice(1).join(' ') };
 }
 
-const ACTIVITY = [
-  { name: 'Kavya Menon', action: 'marked attendance for Grade 8 - A', time: '12 min ago' },
-  { name: 'Suresh Pillai', action: 'published “Science practical schedule”', time: '1 hr ago' },
-  { name: 'Fathima Beevi', action: 'entered English grades for Grade 10 - A', time: '2 hr ago' },
-  { name: 'Rahul Varma', action: 'submitted Climate change essay', time: '3 hr ago' },
-  { name: 'Divya Menon', action: 'approved leave for Arjun Nair', time: '5 hr ago' },
-];
+function relativeTime(value?: string) {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  const diffMs = Date.now() - date.getTime();
+  const mins = Math.floor(diffMs / 60000);
+  if (mins < 1) return 'Just now';
+  if (mins < 60) return `${mins} min ago`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours} hr ago`;
+  const days = Math.floor(hours / 24);
+  if (days < 7) return `${days} day${days === 1 ? '' : 's'} ago`;
+  return date.toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
+}
 
 function DashboardPage() {
+  const [studentCount, setStudentCount] = useState('—');
+  const [staffCount, setStaffCount] = useState('—');
+  const [pendingLeave, setPendingLeave] = useState('—');
+  const [classCount, setClassCount] = useState(0);
   const [todayPct, setTodayPct] = useState('—');
   const [todaySub, setTodaySub] = useState('Loading...');
   const [weekly, setWeekly] = useState<Array<{ day: string; value: number }>>([]);
+  const [activity, setActivity] = useState<
+    Array<{ id: string; name: string; action: string; time: string }>
+  >([]);
+  const [activityLoading, setActivityLoading] = useState(true);
 
   useEffect(() => {
     let active = true;
     (async () => {
       try {
         const today = todayInputValue();
-        const [todayRes, usersRes] = await Promise.all([
-          api.get('/attendance', { params: { date: today } }),
-          api.get('/users', { params: { role: 'STUDENT' } }),
-        ]);
+        const [todayRes, studentsRes, staffRes, leaveRes, classesRes, postsRes] =
+          await Promise.all([
+            api.get('/attendance', { params: { date: today } }),
+            api.get('/users', { params: { role: 'STUDENT' } }),
+            api.get('/users', { params: { role: 'STAFF' } }),
+            api.get('/leave'),
+            api.get('/classes'),
+            api.get('/posts'),
+          ]);
         if (!active) return;
+
+        const students = studentsRes.data as unknown[];
+        const staff = staffRes.data as unknown[];
+        const leave = leaveRes.data as Array<{ status: string }>;
+        const classes = classesRes.data as unknown[];
+        const posts = postsRes.data as Array<{
+          id: string;
+          title: string;
+          createdAt: string;
+          author?: { firstName?: string; lastName?: string } | null;
+        }>;
+
+        setStudentCount(String(students.length));
+        setStaffCount(String(staff.length));
+        setClassCount(classes.length);
+        setPendingLeave(
+          String(leave.filter((item) => item.status === 'PENDING').length),
+        );
+
         const records = todayRes.data as Array<{ status: string }>;
-        const studentCount = (usersRes.data as unknown[]).length;
         const present = records.filter((r) => r.status === 'PRESENT').length;
         const marked = records.length;
         if (!marked) {
@@ -228,8 +265,24 @@ function DashboardPage() {
         } else {
           const pct = Math.round((present / marked) * 1000) / 10;
           setTodayPct(`${pct}%`);
-          setTodaySub(`${present} of ${marked} marked present${studentCount ? ` · ${studentCount} students` : ''}`);
+          setTodaySub(
+            `${present} of ${marked} marked present · ${students.length} students`,
+          );
         }
+
+        setActivity(
+          posts.slice(0, 5).map((post) => {
+            const name =
+              `${post.author?.firstName ?? ''} ${post.author?.lastName ?? ''}`.trim() ||
+              'Admin';
+            return {
+              id: post.id,
+              name,
+              action: `published “${post.title}”`,
+              time: relativeTime(post.createdAt),
+            };
+          }),
+        );
 
         const days: Array<{ day: string; value: number }> = [];
         for (let i = 6; i >= 0; i -= 1) {
@@ -250,10 +303,16 @@ function DashboardPage() {
         setWeekly(days);
       } catch {
         if (active) {
+          setStudentCount('—');
+          setStaffCount('—');
+          setPendingLeave('—');
           setTodayPct('—');
-          setTodaySub('Could not load attendance');
+          setTodaySub('Could not load dashboard');
           setWeekly([]);
+          setActivity([]);
         }
+      } finally {
+        if (active) setActivityLoading(false);
       }
     })().catch(console.error);
     return () => {
@@ -265,21 +324,23 @@ function DashboardPage() {
     <>
       <SectionHeader
         title="Dashboard"
-        subtitle="Overview for Greenfield International School · Term 2, 2026"
+        subtitle={
+          classCount
+            ? `School overview · ${classCount} class${classCount === 1 ? '' : 'es'}`
+            : 'School overview'
+        }
       />
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4 lg:gap-4">
         <StatCard
           label="Total students"
-          value="1,248"
-          trend={{ direction: 'up', percent: '4.2%' }}
-          subtext="vs last term"
+          value={studentCount}
+          subtext="Active student accounts"
           icon={<Users className="h-4 w-4" />}
         />
         <StatCard
           label="Teaching staff"
-          value="86"
-          trend={{ direction: 'up', percent: '2.4%' }}
-          subtext="3 new this term"
+          value={staffCount}
+          subtext="Staff accounts"
           icon={<GraduationCap className="h-4 w-4" />}
         />
         <StatCard
@@ -290,8 +351,7 @@ function DashboardPage() {
         />
         <StatCard
           label="Pending leave"
-          value="12"
-          trend={{ direction: 'down', percent: '8%' }}
+          value={pendingLeave}
           subtext="Awaiting review"
           icon={<CalendarOff className="h-4 w-4" />}
         />
@@ -316,21 +376,29 @@ function DashboardPage() {
           </div>
         </Card>
         <Card className="p-4 md:p-5">
-          <h2 className="font-semibold text-gray-900">Recent activity</h2>
-          <ul className="mt-4 space-y-4">
-            {ACTIVITY.map((item) => (
-              <li key={`${item.name}-${item.time}`} className="flex gap-3">
-                <Avatar name={item.name} size="sm" />
-                <div className="min-w-0">
-                  <p className="text-sm text-gray-900">
-                    <span className="font-medium">{item.name}</span>{' '}
-                    <span className="text-gray-500">{item.action}</span>
-                  </p>
-                  <p className="mt-0.5 text-xs text-gray-400">{item.time}</p>
-                </div>
-              </li>
-            ))}
-          </ul>
+          <h2 className="font-semibold text-gray-900">Recent posts</h2>
+          {activityLoading && (
+            <p className="mt-4 text-sm text-gray-500">Loading activity...</p>
+          )}
+          {!activityLoading && !activity.length && (
+            <p className="mt-4 text-sm text-gray-500">No posts published yet.</p>
+          )}
+          {!activityLoading && activity.length > 0 && (
+            <ul className="mt-4 space-y-4">
+              {activity.map((item) => (
+                <li key={item.id} className="flex gap-3">
+                  <Avatar name={item.name} size="sm" />
+                  <div className="min-w-0">
+                    <p className="text-sm text-gray-900">
+                      <span className="font-medium">{item.name}</span>{' '}
+                      <span className="text-gray-500">{item.action}</span>
+                    </p>
+                    <p className="mt-0.5 text-xs text-gray-400">{item.time}</p>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
         </Card>
       </div>
     </>

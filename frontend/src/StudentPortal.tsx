@@ -55,16 +55,6 @@ const STUDENT = {
   term: 'Term 2, 2026',
 };
 
-const PAGE_LABELS: Record<PageId, string> = {
-  dashboard: 'Dashboard',
-  announcements: 'Announcements',
-  attendance: 'Attendance',
-  grades: 'Grade Card',
-  assignments: 'Assignments',
-  leave: 'Leave',
-  messages: 'Messages',
-};
-
 const NAV_ITEMS: { id: PageId; label: string; short: string; icon: typeof LayoutDashboard }[] = [
   { id: 'dashboard', label: 'Dashboard', short: 'Home', icon: LayoutDashboard },
   { id: 'announcements', label: 'Announcements', short: 'News', icon: Megaphone },
@@ -259,12 +249,6 @@ function announcementTone(audience: string): BadgeTone {
   return 'slate';
 }
 
-const UPCOMING = [
-  { title: 'Climate change essay', subject: 'Social Studies', due: '16 Sep' },
-  { title: 'Quadratic equations worksheet', subject: 'Mathematics', due: '14 Sep' },
-  { title: 'Lab report — acids & bases', subject: 'Science', due: '20 Sep' },
-];
-
 function gradeTone(grade: string): BadgeTone {
   if (grade.startsWith('A')) return 'green';
   if (grade.startsWith('B')) return 'violet';
@@ -306,12 +290,19 @@ function leaveTone(status: string): BadgeTone {
 function DashboardPage({
   firstName,
   className,
+  onOpenAssignments,
 }: {
   firstName: string;
   className: string;
+  onOpenAssignments?: () => void;
 }) {
   const [attendancePct, setAttendancePct] = useState<string>('—');
   const [attendanceSub, setAttendanceSub] = useState('Loading attendance...');
+  const [upcoming, setUpcoming] = useState<
+    Array<{ id: string; title: string; subject: string; dueDate: string; status?: string }>
+  >([]);
+  const [assignmentsDueCount, setAssignmentsDueCount] = useState<string>('—');
+  const [assignmentsLoading, setAssignmentsLoading] = useState(true);
 
   useEffect(() => {
     let active = true;
@@ -335,6 +326,57 @@ function DashboardPage({
           setAttendancePct('—');
           setAttendanceSub('Could not load attendance');
         }
+      }
+    })().catch(console.error);
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      setAssignmentsLoading(true);
+      try {
+        const { data } = await api.get('/assignments');
+        if (!active) return;
+        const list = (data as Array<{
+          id: string;
+          title: string;
+          subject: string;
+          dueDate: string;
+          submissions?: Array<{ status: string }>;
+        }>).slice();
+
+        const open = list.filter((item) => {
+          const status = item.submissions?.[0]?.status;
+          return status !== 'APPROVED';
+        });
+
+        open.sort(
+          (a, b) => new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime(),
+        );
+
+        setAssignmentsDueCount(String(open.length));
+        setUpcoming(
+          open.slice(0, 3).map((item) => {
+            const status = item.submissions?.[0]?.status;
+            return {
+              id: item.id,
+              title: item.title,
+              subject: item.subject,
+              dueDate: item.dueDate,
+              status,
+            };
+          }),
+        );
+      } catch {
+        if (active) {
+          setAssignmentsDueCount('—');
+          setUpcoming([]);
+        }
+      } finally {
+        if (active) setAssignmentsLoading(false);
       }
     })().catch(console.error);
     return () => {
@@ -376,7 +418,9 @@ function DashboardPage({
               <p className="text-xs text-gray-400">Assignments due</p>
               <BookOpen className="h-4 w-4 text-violet-400" />
             </div>
-            <p className="mt-3 text-2xl font-bold text-gray-900 md:text-3xl">2</p>
+            <p className="mt-3 text-2xl font-bold text-gray-900 md:text-3xl">
+              {assignmentsDueCount}
+            </p>
           </Card>
           <Card className="p-4 md:p-5">
             <div className="flex items-center justify-between">
@@ -396,16 +440,45 @@ function DashboardPage({
       </div>
 
       <Card className="mt-4 p-4 md:mt-5 md:p-5">
-        <h2 className="font-semibold text-gray-900">Upcoming assignments</h2>
-        <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-3">
-          {UPCOMING.map((item) => (
-            <div key={item.title} className="rounded-2xl bg-violet-50/40 p-4">
-              <Badge tone="amber">Due {item.due}</Badge>
-              <p className="mt-3 text-sm font-semibold text-gray-900">{item.title}</p>
-              <p className="mt-1 text-xs text-gray-400">{item.subject}</p>
-            </div>
-          ))}
+        <div className="flex items-center justify-between gap-3">
+          <h2 className="font-semibold text-gray-900">Upcoming assignments</h2>
+          {onOpenAssignments && (
+            <button
+              type="button"
+              onClick={onOpenAssignments}
+              className="text-sm font-medium text-indigo-600 hover:text-indigo-700"
+            >
+              View all
+            </button>
+          )}
         </div>
+        {assignmentsLoading && (
+          <p className="mt-4 text-sm text-gray-500">Loading assignments...</p>
+        )}
+        {!assignmentsLoading && upcoming.length === 0 && (
+          <p className="mt-4 text-sm text-gray-500">No open assignments for your class right now.</p>
+        )}
+        {!assignmentsLoading && upcoming.length > 0 && (
+          <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-3">
+            {upcoming.map((item) => (
+              <button
+                key={item.id}
+                type="button"
+                onClick={onOpenAssignments}
+                className="rounded-2xl bg-violet-50/40 p-4 text-left transition-colors hover:bg-violet-50"
+              >
+                <div className="flex flex-wrap items-center gap-2">
+                  <Badge tone="amber">Due {formatStudentDue(item.dueDate)}</Badge>
+                  <Badge tone={submissionTone(item.status)}>
+                    {submissionLabel(item.status)}
+                  </Badge>
+                </div>
+                <p className="mt-3 text-sm font-semibold text-gray-900">{item.title}</p>
+                <p className="mt-1 text-xs text-gray-400">{item.subject}</p>
+              </button>
+            ))}
+          </div>
+        )}
       </Card>
     </>
   );
@@ -1517,7 +1590,11 @@ export default function StudentPortal() {
 
       <main className="mx-auto max-w-6xl px-4 py-6 md:px-6 md:py-8">
         {page === 'dashboard' ? (
-          <DashboardPage firstName={firstName} className={classLabel} />
+          <DashboardPage
+            firstName={firstName}
+            className={classLabel}
+            onOpenAssignments={() => setPage('assignments')}
+          />
         ) : (
           <StudentPage
             page={page}

@@ -3,30 +3,73 @@ import * as bcrypt from 'bcrypt';
 
 const prisma = new PrismaClient();
 
-const SUBJECTS: TeachingSubject[] = [
-  TeachingSubject.ARABIC,
-  TeachingSubject.ENGLISH,
-  TeachingSubject.MALAYALAM,
-  TeachingSubject.MATHEMATICS,
-  TeachingSubject.SOCIAL_SCIENCE,
-  TeachingSubject.HINDI,
-  TeachingSubject.CHEMISTRY,
-  TeachingSubject.BIOLOGY,
-  TeachingSubject.PHYSICS,
-  TeachingSubject.IT,
-];
-
-const STAFF = [
-  { firstName: 'Amina', lastName: 'Hassan', email: 'arabic@school.com' },
-  { firstName: 'Emma', lastName: 'Wright', email: 'english@school.com' },
-  { firstName: 'Ravi', lastName: 'Nair', email: 'malayalam@school.com' },
-  { firstName: 'Maya', lastName: 'Patel', email: 'math@school.com' },
-  { firstName: 'Sam', lastName: 'Cohen', email: 'social@school.com' },
-  { firstName: 'Priya', lastName: 'Sharma', email: 'hindi@school.com' },
-  { firstName: 'Chen', lastName: 'Wei', email: 'chemistry@school.com' },
-  { firstName: 'Nora', lastName: 'Ali', email: 'biology@school.com' },
-  { firstName: 'James', lastName: 'Brooks', email: 'physics@school.com' },
-  { firstName: 'Lina', lastName: 'Okada', email: 'it@school.com' },
+/** Demo staff — staff@school.com is the main staff login used on the login page. */
+const STAFF: Array<{
+  firstName: string;
+  lastName: string;
+  email: string;
+  subject: TeachingSubject;
+}> = [
+  {
+    firstName: 'Kavya',
+    lastName: 'Menon',
+    email: 'staff@school.com',
+    subject: TeachingSubject.ENGLISH,
+  },
+  {
+    firstName: 'Amina',
+    lastName: 'Hassan',
+    email: 'arabic@school.com',
+    subject: TeachingSubject.ARABIC,
+  },
+  {
+    firstName: 'Ravi',
+    lastName: 'Nair',
+    email: 'malayalam@school.com',
+    subject: TeachingSubject.MALAYALAM,
+  },
+  {
+    firstName: 'Maya',
+    lastName: 'Patel',
+    email: 'math@school.com',
+    subject: TeachingSubject.MATHEMATICS,
+  },
+  {
+    firstName: 'Sam',
+    lastName: 'Cohen',
+    email: 'social@school.com',
+    subject: TeachingSubject.SOCIAL_SCIENCE,
+  },
+  {
+    firstName: 'Priya',
+    lastName: 'Sharma',
+    email: 'hindi@school.com',
+    subject: TeachingSubject.HINDI,
+  },
+  {
+    firstName: 'Chen',
+    lastName: 'Wei',
+    email: 'chemistry@school.com',
+    subject: TeachingSubject.CHEMISTRY,
+  },
+  {
+    firstName: 'Nora',
+    lastName: 'Ali',
+    email: 'biology@school.com',
+    subject: TeachingSubject.BIOLOGY,
+  },
+  {
+    firstName: 'James',
+    lastName: 'Brooks',
+    email: 'physics@school.com',
+    subject: TeachingSubject.PHYSICS,
+  },
+  {
+    firstName: 'Lina',
+    lastName: 'Okada',
+    email: 'it@school.com',
+    subject: TeachingSubject.IT,
+  },
 ];
 
 const STUDENTS = [
@@ -50,6 +93,8 @@ const STUDENTS = [
 async function main() {
   console.log('Clearing database...');
 
+  await prisma.timetableEntry.deleteMany();
+  await prisma.timetablePeriod.deleteMany();
   await prisma.message.deleteMany();
   await prisma.leaveRequest.deleteMany();
   await prisma.assignmentSubmission.deleteMany();
@@ -61,6 +106,7 @@ async function main() {
   await prisma.postRead.deleteMany();
   await prisma.postTarget.deleteMany();
   await prisma.post.deleteMany();
+  await prisma.staffClassAssignment.deleteMany();
   await prisma.studentProfile.deleteMany();
   await prisma.staffProfile.deleteMany();
   await prisma.user.deleteMany();
@@ -96,7 +142,7 @@ async function main() {
 
   for (let i = 0; i < STAFF.length; i++) {
     const person = STAFF[i];
-    const subject = SUBJECTS[i];
+    const subject = person.subject;
     await prisma.user.create({
       data: {
         email: person.email,
@@ -117,7 +163,12 @@ async function main() {
                     create: { schoolClassId: classTeacherIds[i] },
                   },
                 }
-              : {}),
+              : {
+                  // Non-homeroom subject teachers still teach all three classes
+                  classAssignments: {
+                    create: classes.map((c) => ({ schoolClassId: c.id })),
+                  },
+                }),
           },
         },
       },
@@ -149,17 +200,10 @@ async function main() {
   console.log('Seed complete.');
   console.log('');
   console.log('Demo logins (password: password123):');
-  console.log('  Admin:  admin@school.com');
+  console.log('  Admin:   admin@school.com');
+  console.log('  Staff:   staff@school.com  (ENGLISH · class teacher 10-A)');
+  console.log('  Student: student@school.com');
   console.log('  Classes: 10-A, 10-B, 10-C');
-  console.log('  Class teachers:');
-  console.log('    arabic@school.com  → 10-A (ARABIC)');
-  console.log('    english@school.com → 10-B (ENGLISH)');
-  console.log('    malayalam@school.com → 10-C (MALAYALAM)');
-  console.log('  Other staff (subject only, no class):');
-  for (let i = 3; i < STAFF.length; i++) {
-    console.log(`    ${STAFF[i].email} (${SUBJECTS[i]})`);
-  }
-  console.log('  Students: 15 (5 per class) — student@school.com … finley@school.com');
 }
 
 main()

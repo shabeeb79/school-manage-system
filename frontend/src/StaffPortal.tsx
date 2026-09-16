@@ -1,26 +1,26 @@
 import {
   Bell,
   BookOpen,
+  CalendarClock,
   CalendarOff,
   Check,
-  ChevronDown,
   ChevronLeft,
   ChevronRight,
   ClipboardCheck,
   GraduationCap,
   LayoutDashboard,
   LogOut,
-  MapPin,
   Megaphone,
   Menu,
   MessageSquare,
   Pencil,
   Plus,
   Search,
+  Trash2,
   Users,
   X,
 } from 'lucide-react';
-import { useEffect, useMemo, useState, type FormEvent } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
 import { useAuth } from './auth/AuthContext';
 import api from './api/client';
 import MessagesChat from './components/MessagesChat';
@@ -39,7 +39,6 @@ import { startPortalNotifications } from './lib/notifications';
 import { teachingSubjectLabel } from './lib/subjects';
 import {
   isStaffClassTeacher,
-  staffAssignedClassIds,
   staffAssignedClasses,
   staffClassTeacherClass,
 } from './lib/staffClasses';
@@ -55,7 +54,6 @@ import {
   Card,
   IconButton,
   Modal,
-  OverflowMenu,
   PersonCell,
   PostMedia,
   PrimaryButton,
@@ -72,6 +70,7 @@ type PageId =
   | 'attendance'
   | 'grades'
   | 'assignments'
+  | 'timetable'
   | 'leave'
   | 'messages'
   | 'announcements';
@@ -86,6 +85,7 @@ const PAGE_LABELS: Record<PageId, string> = {
   attendance: 'Attendance',
   grades: 'Grades',
   assignments: 'Assignments',
+  timetable: 'Timetable',
   leave: 'Leave',
   messages: 'Messages',
   announcements: 'Announcements',
@@ -97,23 +97,10 @@ const NAV_ITEMS: { id: PageId; label: string; icon: typeof LayoutDashboard }[] =
   { id: 'attendance', label: 'Attendance', icon: ClipboardCheck },
   { id: 'grades', label: 'Grades', icon: GraduationCap },
   { id: 'assignments', label: 'Assignments', icon: BookOpen },
+  { id: 'timetable', label: 'Timetable', icon: CalendarClock },
   { id: 'leave', label: 'Leave', icon: CalendarOff },
   { id: 'messages', label: 'Messages', icon: MessageSquare },
   { id: 'announcements', label: 'Announcements', icon: Megaphone },
-];
-
-const SCHEDULE = [
-  { id: 'p1', time: '08:30 – 09:15', subject: 'English', section: 'Grade 9 - A', room: 'Room 14', current: false },
-  { id: 'p2', time: '09:20 – 10:05', subject: 'English', section: 'Grade 8 - B', room: 'Room 11', current: false },
-  { id: 'p3', time: '11:00 – 11:45', subject: 'English', section: 'Grade 9 - A', room: 'Room 14', current: true },
-  { id: 'p4', time: '13:10 – 13:55', subject: 'English', section: 'Grade 10 - A', room: 'Room 05', current: false },
-];
-
-const NEEDS_GRADING = [
-  { title: 'Macbeth scene analysis', className: 'Grade 10 - A', done: 31, total: 40 },
-  { title: 'Letter to the editor', className: 'Grade 9 - A', done: 28, total: 36 },
-  { title: 'Unseen passage worksheet', className: 'Grade 9 - A', done: 12, total: 36 },
-  { title: 'Poetry comprehension', className: 'Grade 8 - B', done: 18, total: 34 },
 ];
 
 type FeedPost = {
@@ -204,44 +191,128 @@ function AttendanceButtons({
 function DashboardPage({
   teacherName,
   onViewAssignments,
+  onViewTimetable,
 }: {
   teacherName: string;
   onViewAssignments: () => void;
+  onViewTimetable?: () => void;
 }) {
+  const { user } = useAuth();
+  const subjectLabel = teachingSubjectLabel(user?.staffProfile?.subject);
+  const departmentLabel =
+    subjectLabel || user?.staffProfile?.department || 'Staff';
+
   const [attendanceValue, setAttendanceValue] = useState('—');
   const [attendanceSub, setAttendanceSub] = useState('Loading today...');
   const [studentCount, setStudentCount] = useState('—');
+  const [pendingGrading, setPendingGrading] = useState('—');
+  const [openAssignments, setOpenAssignments] = useState('—');
+  const [needsGrading, setNeedsGrading] = useState<
+    Array<{ id: string; title: string; className: string; done: number; total: number; pending: number }>
+  >([]);
+  const [listsLoading, setListsLoading] = useState(true);
+  const [nextClass, setNextClass] = useState<NextClassInfo | null>(null);
+  const [todayClasses, setTodayClasses] = useState<
+    Array<{
+      id: string;
+      startTime: string;
+      endTime: string;
+      classLabel: string;
+      startMin: number;
+      endMin: number;
+    }>
+  >([]);
+  const [timetableLoading, setTimetableLoading] = useState(true);
 
   useEffect(() => {
     let active = true;
     (async () => {
       try {
         const today = todayInputValue();
-        const [rosterRes, classRes, attendanceRes] = await Promise.all([
-          api.get('/users/my-students'),
-          api.get('/users/my-class-students'),
-          api.get('/attendance', { params: { date: today } }),
-        ]);
+        const [rosterRes, classRes, attendanceRes, assignmentsRes, timetableRes] =
+          await Promise.all([
+            api.get('/users/my-students'),
+            api.get('/users/my-class-students'),
+            api.get('/attendance', { params: { date: today } }),
+            api.get('/assignments'),
+            api.get('/timetable/mine').catch(() => ({ data: { periods: [] } })),
+          ]);
         if (!active) return;
+
         const roster = rosterRes.data as unknown[];
         const classStudents = classRes.data as unknown[];
         const records = attendanceRes.data as Array<{ status: string }>;
         setStudentCount(String(roster.length));
+
         if (!classStudents.length) {
           setAttendanceValue('—');
           setAttendanceSub('Class teacher attendance only');
-          return;
+        } else {
+          setAttendanceValue(`${records.length} / ${classStudents.length}`);
+          setAttendanceSub(
+            records.length === classStudents.length
+              ? 'Today complete'
+              : 'Mark remaining students today',
+          );
         }
-        setAttendanceValue(`${records.length} / ${classStudents.length}`);
-        setAttendanceSub(
-          records.length === classStudents.length
-            ? 'Today complete'
-            : 'Mark remaining students today',
-        );
+
+        const assignments = assignmentsRes.data as Array<{
+          id: string;
+          title: string;
+          schoolClass?: { name?: string; section?: string | null } | null;
+          submissions?: Array<{ status: string }>;
+          _count?: { submissions?: number };
+        }>;
+
+        let pendingCount = 0;
+        const gradingRows = assignments.map((item) => {
+          const submissions = item.submissions ?? [];
+          const pending = submissions.filter(
+            (s) => s.status === 'SUBMITTED' || s.status === 'PENDING',
+          ).length;
+          pendingCount += pending;
+          const done = submissions.filter(
+            (s) =>
+              s.status === 'SUBMITTED' ||
+              s.status === 'PENDING' ||
+              s.status === 'APPROVED' ||
+              s.status === 'REJECTED',
+          ).length;
+          return {
+            id: item.id,
+            title: item.title,
+            className: formatClassLabel(item.schoolClass),
+            done,
+            total: Math.max(done, item._count?.submissions ?? submissions.length),
+            pending,
+          };
+        });
+
+        const needsReview = gradingRows
+          .filter((row) => row.pending > 0)
+          .sort((a, b) => b.pending - a.pending);
+
+        setPendingGrading(String(pendingCount));
+        setOpenAssignments(String(assignments.length));
+        setNeedsGrading(needsReview.slice(0, 4));
+
+        const periods = (timetableRes.data?.periods ?? []) as TimetablePeriodRow[];
+        setNextClass(findNextClass(periods));
+        setTodayClasses(todaysSchedule(periods));
       } catch {
         if (active) {
           setAttendanceValue('—');
           setAttendanceSub('Could not load attendance');
+          setPendingGrading('—');
+          setOpenAssignments('—');
+          setNeedsGrading([]);
+          setNextClass(null);
+          setTodayClasses([]);
+        }
+      } finally {
+        if (active) {
+          setListsLoading(false);
+          setTimetableLoading(false);
         }
       }
     })().catch(console.error);
@@ -250,46 +321,105 @@ function DashboardPage({
     };
   }, []);
 
+  const nextClassValue = nextClass
+    ? `${formatClockLabel(nextClass.startTime)} – ${formatClockLabel(nextClass.endTime)}`
+    : '—';
+  const nextClassSub = nextClass
+    ? `${nextClass.classLabel}${nextClass.status === 'now' ? ' · in progress' : ' · up next'}`
+    : 'No more classes today';
+
+  const minutesNow = nowMinutes();
+
   return (
     <>
       <SectionHeader
         title={`Good morning, ${teacherName}`}
-        subtitle={`${TEACHER.department} · ${formatDayLabel(todayInputValue())}`}
+        subtitle={`${departmentLabel} · ${formatDayLabel(todayInputValue())}`}
       />
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4 lg:gap-4">
-        <StatCard label="Classes today" value="4" subtext="3 remaining after this period" icon={<BookOpen className="h-4 w-4" />} />
-        <StatCard label="Total students" value={studentCount} subtext="In your teaching roster" icon={<Users className="h-4 w-4" />} />
-        <StatCard label="Pending grading" value="18" subtext="4 assignments open" icon={<GraduationCap className="h-4 w-4" />} />
-        <StatCard label="Attendance marked" value={attendanceValue} subtext={attendanceSub} icon={<ClipboardCheck className="h-4 w-4" />} />
+        <StatCard
+          label="Next class"
+          value={timetableLoading ? '…' : nextClassValue}
+          subtext={timetableLoading ? 'Loading timetable...' : nextClassSub}
+          icon={<CalendarClock className="h-4 w-4" />}
+        />
+        <StatCard
+          label="Total students"
+          value={studentCount}
+          subtext="In your teaching roster"
+          icon={<Users className="h-4 w-4" />}
+        />
+        <StatCard
+          label="Pending grading"
+          value={pendingGrading}
+          subtext={`${openAssignments} assignment${openAssignments === '1' ? '' : 's'} open`}
+          icon={<GraduationCap className="h-4 w-4" />}
+        />
+        <StatCard
+          label="Attendance marked"
+          value={attendanceValue}
+          subtext={attendanceSub}
+          icon={<ClipboardCheck className="h-4 w-4" />}
+        />
       </div>
       <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-3">
         <Card className="p-4 md:p-5 lg:col-span-2">
-          <h2 className="font-semibold text-gray-900">Today's schedule</h2>
-          <ul className="mt-4 space-y-2">
-            {SCHEDULE.map((slot) => (
-              <li
-                key={slot.id}
-                className={cn(
-                  'flex flex-col gap-2 rounded-xl px-3 py-3 sm:flex-row sm:items-center sm:justify-between',
-                  slot.current ? 'bg-blue-50' : 'hover:bg-gray-50',
-                )}
+          <div className="flex items-center justify-between gap-2">
+            <div>
+              <h2 className="font-semibold text-gray-900">Today&apos;s classes</h2>
+              <p className="mt-1 text-sm text-gray-400">
+                From your timetable · {WEEK_DAY_LABELS[todayWeekDay()]}
+              </p>
+            </div>
+            {onViewTimetable && (
+              <button
+                type="button"
+                onClick={onViewTimetable}
+                className="text-sm font-medium text-blue-600 hover:text-blue-700"
               >
-                <div className="min-w-0">
-                  <p className="text-xs font-medium text-gray-400">{slot.time}</p>
-                  <p className="mt-1 text-sm font-medium text-gray-900">
-                    {slot.subject} · {slot.section}
-                  </p>
-                </div>
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="inline-flex items-center gap-1 text-sm text-gray-500">
-                    <MapPin className="h-3.5 w-3.5 text-gray-400" />
-                    {slot.room}
-                  </span>
-                  {slot.current && <Badge tone="blue">Now</Badge>}
-                </div>
-              </li>
-            ))}
-          </ul>
+                Edit timetable
+              </button>
+            )}
+          </div>
+          {timetableLoading && (
+            <p className="mt-4 text-sm text-gray-500">Loading today&apos;s schedule...</p>
+          )}
+          {!timetableLoading && !todayClasses.length && (
+            <p className="mt-4 text-sm text-gray-500">
+              No classes scheduled for today. Open Timetable to assign periods.
+            </p>
+          )}
+          {!timetableLoading && todayClasses.length > 0 && (
+            <ul className="mt-4 space-y-2">
+              {todayClasses.map((slot) => {
+                const isNow = minutesNow >= slot.startMin && minutesNow < slot.endMin;
+                const isPast = minutesNow >= slot.endMin;
+                return (
+                  <li
+                    key={slot.id}
+                    className={cn(
+                      'flex flex-col gap-1 rounded-xl px-3 py-3 sm:flex-row sm:items-center sm:justify-between',
+                      isNow ? 'bg-blue-50' : 'hover:bg-gray-50',
+                      isPast && 'opacity-60',
+                    )}
+                  >
+                    <div className="min-w-0">
+                      <p className="text-xs font-medium text-gray-400">
+                        {formatClockLabel(slot.startTime)} – {formatClockLabel(slot.endTime)}
+                      </p>
+                      <p className="mt-1 text-sm font-medium text-gray-900">
+                        {slot.classLabel}
+                        {subjectLabel ? ` · ${subjectLabel}` : ''}
+                      </p>
+                    </div>
+                    {isNow && <Badge tone="blue">Now</Badge>}
+                    {!isNow && !isPast && <Badge tone="slate">Upcoming</Badge>}
+                    {isPast && <Badge tone="slate">Done</Badge>}
+                  </li>
+                );
+              })}
+            </ul>
+          )}
         </Card>
         <Card className="p-4 md:p-5">
           <div className="flex items-center justify-between gap-2">
@@ -302,17 +432,25 @@ function DashboardPage({
               View all
             </button>
           </div>
-          <ul className="mt-4 space-y-4">
-            {NEEDS_GRADING.map((item) => (
-              <li key={item.title}>
-                <p className="text-sm font-medium text-gray-900">{item.title}</p>
-                <p className="mt-0.5 text-xs text-gray-400">{item.className}</p>
-                <p className="mt-1 text-sm text-gray-500">
-                  {item.done} / {item.total} submitted
-                </p>
-              </li>
-            ))}
-          </ul>
+          {listsLoading && (
+            <p className="mt-4 text-sm text-gray-500">Loading assignments...</p>
+          )}
+          {!listsLoading && !needsGrading.length && (
+            <p className="mt-4 text-sm text-gray-500">No submissions waiting for review.</p>
+          )}
+          {!listsLoading && needsGrading.length > 0 && (
+            <ul className="mt-4 space-y-4">
+              {needsGrading.map((item) => (
+                <li key={item.id}>
+                  <p className="text-sm font-medium text-gray-900">{item.title}</p>
+                  <p className="mt-0.5 text-xs text-gray-400">{item.className}</p>
+                  <p className="mt-1 text-sm text-gray-500">
+                    {item.pending} awaiting review · {item.done} submitted
+                  </p>
+                </li>
+              ))}
+            </ul>
+          )}
         </Card>
       </div>
     </>
@@ -371,10 +509,151 @@ function studentFullName(student: ApiStudent) {
   return `${student.user?.firstName ?? ''} ${student.user?.lastName ?? ''}`.trim() || 'Student';
 }
 
-function formatClassLabel(schoolClass?: { name: string; section?: string | null } | null) {
+function formatClassLabel(schoolClass?: { name?: string; section?: string | null } | null) {
   if (!schoolClass?.name) return '—';
   const section = schoolClass.section?.trim();
   return section ? `${schoolClass.name}-${section}` : schoolClass.name;
+}
+
+const WEEK_DAYS = [
+  'MONDAY',
+  'TUESDAY',
+  'WEDNESDAY',
+  'THURSDAY',
+  'FRIDAY',
+  'SATURDAY',
+  'SUNDAY',
+] as const;
+
+type WeekDay = (typeof WEEK_DAYS)[number];
+
+const WEEK_DAY_LABELS: Record<WeekDay, string> = {
+  MONDAY: 'Mon',
+  TUESDAY: 'Tue',
+  WEDNESDAY: 'Wed',
+  THURSDAY: 'Thu',
+  FRIDAY: 'Fri',
+  SATURDAY: 'Sat',
+  SUNDAY: 'Sun',
+};
+
+type TimetablePeriodRow = {
+  id: string;
+  startTime: string;
+  endTime: string;
+  sortOrder: number;
+  entriesByDay: Record<
+    string,
+    {
+      id: string;
+      schoolClassId: string | null;
+      schoolClass: { id: string; name: string; section?: string | null } | null;
+    } | null
+  >;
+};
+
+function formatClockLabel(time: string) {
+  const [hStr, mStr] = time.split(':');
+  const h = Number(hStr);
+  const m = Number(mStr);
+  if (Number.isNaN(h) || Number.isNaN(m)) return time;
+  const suffix = h >= 12 ? 'pm' : 'am';
+  const hour12 = h % 12 || 12;
+  return `${hour12}:${String(m).padStart(2, '0')} ${suffix}`;
+}
+
+function timeToMinutes(time: string) {
+  const [h, m] = time.split(':').map(Number);
+  if (Number.isNaN(h) || Number.isNaN(m)) return 0;
+  return h * 60 + m;
+}
+
+function todayWeekDay(date = new Date()): WeekDay {
+  // JS: 0 Sunday … 6 Saturday → our WeekDay enum order Mon-first
+  const map: WeekDay[] = [
+    'SUNDAY',
+    'MONDAY',
+    'TUESDAY',
+    'WEDNESDAY',
+    'THURSDAY',
+    'FRIDAY',
+    'SATURDAY',
+  ];
+  return map[date.getDay()];
+}
+
+function nowMinutes(date = new Date()) {
+  return date.getHours() * 60 + date.getMinutes();
+}
+
+type NextClassInfo = {
+  startTime: string;
+  endTime: string;
+  classLabel: string;
+  status: 'now' | 'upcoming';
+};
+
+function findNextClass(
+  periods: TimetablePeriodRow[],
+  day: WeekDay = todayWeekDay(),
+  minutes = nowMinutes(),
+): NextClassInfo | null {
+  const todays = periods
+    .map((period) => {
+      const entry = period.entriesByDay?.[day];
+      const schoolClass = entry?.schoolClass;
+      if (!schoolClass?.id) return null;
+      return {
+        startTime: period.startTime,
+        endTime: period.endTime,
+        classLabel: formatClassLabel(schoolClass),
+        startMin: timeToMinutes(period.startTime),
+        endMin: timeToMinutes(period.endTime),
+      };
+    })
+    .filter((row): row is NonNullable<typeof row> => Boolean(row))
+    .sort((a, b) => a.startMin - b.startMin);
+
+  const current = todays.find((row) => minutes >= row.startMin && minutes < row.endMin);
+  if (current) {
+    return {
+      startTime: current.startTime,
+      endTime: current.endTime,
+      classLabel: current.classLabel,
+      status: 'now',
+    };
+  }
+
+  const upcoming = todays.find((row) => row.startMin >= minutes);
+  if (!upcoming) return null;
+  return {
+    startTime: upcoming.startTime,
+    endTime: upcoming.endTime,
+    classLabel: upcoming.classLabel,
+    status: 'upcoming',
+  };
+}
+
+function todaysSchedule(
+  periods: TimetablePeriodRow[],
+  day: WeekDay = todayWeekDay(),
+) {
+  return periods
+    .map((period) => {
+      const entry = period.entriesByDay?.[day];
+      const schoolClass = entry?.schoolClass;
+      if (!schoolClass?.id) return null;
+      return {
+        id: period.id,
+        startTime: period.startTime,
+        endTime: period.endTime,
+        classLabel: formatClassLabel(schoolClass),
+        startMin: timeToMinutes(period.startTime),
+        endMin: timeToMinutes(period.endTime),
+      };
+    })
+    .filter((row): row is NonNullable<typeof row> => Boolean(row))
+    .sort((a, b) => a.startMin - b.startMin);
 }
 
 function StudentFormModal({
@@ -1037,9 +1316,9 @@ function AttendancePage() {
 
 function GradesPage() {
   const { user } = useAuth();
-  const assignedClasses = staffAssignedClasses(user?.staffProfile);
-  const assignedClassIds = assignedClasses.map((c) => c.id);
-  const [selectedClassId, setSelectedClassId] = useState(assignedClassIds[0] ?? '');
+  const profileClasses = staffAssignedClasses(user?.staffProfile);
+  const profileClassIds = profileClasses.map((c) => c.id);
+  const [selectedClassId, setSelectedClassId] = useState(profileClassIds[0] ?? '');
   const [data, setData] = useState<{
     subject: string;
     examName: string;
@@ -1065,24 +1344,35 @@ function GradesPage() {
   const [saveError, setSaveError] = useState('');
 
   useEffect(() => {
-    if (!selectedClassId && assignedClassIds[0]) {
-      setSelectedClassId(assignedClassIds[0]);
-    } else if (selectedClassId && !assignedClassIds.includes(selectedClassId)) {
-      setSelectedClassId(assignedClassIds[0] ?? '');
+    if (!selectedClassId && profileClassIds[0]) {
+      setSelectedClassId(profileClassIds[0]);
+    } else if (selectedClassId && profileClassIds.length && !profileClassIds.includes(selectedClassId)) {
+      setSelectedClassId(profileClassIds[0] ?? '');
     }
-  }, [assignedClassIds.join(','), selectedClassId]);
+  }, [profileClassIds.join(','), selectedClassId]);
 
-  const load = async () => {
+  const load = async (classId?: string) => {
     setError('');
     try {
-      if (!selectedClassId) {
-        setData(null);
-        return;
-      }
-      const { data: payload } = await api.get('/grades/my-class', {
-        params: { schoolClassId: selectedClassId },
-      });
+      const params =
+        classId || selectedClassId
+          ? { schoolClassId: classId || selectedClassId }
+          : undefined;
+      const { data: payload } = await api.get('/grades/my-class', { params });
       setData(payload);
+
+      const apiClasses = (payload.assignedClasses ?? []) as Array<{ id: string }>;
+      if (!selectedClassId && apiClasses[0]?.id) {
+        setSelectedClassId(apiClasses[0].id);
+      } else if (
+        selectedClassId &&
+        apiClasses.length &&
+        !apiClasses.some((c) => c.id === selectedClassId) &&
+        apiClasses[0]?.id
+      ) {
+        setSelectedClassId(apiClasses[0].id);
+      }
+
       const next: Record<string, string> = {};
       for (const student of payload.students as Array<{
         userId: string;
@@ -1096,7 +1386,7 @@ function GradesPage() {
       setError(
         apiErrorMessage(
           err,
-          'Could not load class grades. Assign a class and subject to this teacher.',
+          'Could not load class grades. Ask admin to assign a class and subject to this teacher.',
         ),
       );
       setData(null);
@@ -1107,14 +1397,14 @@ function GradesPage() {
 
   useEffect(() => {
     setLoading(true);
-    load().catch(console.error);
+    load(selectedClassId || undefined).catch(console.error);
   }, [selectedClassId]);
 
   const subjectLabel = teachingSubjectLabel(data?.subject ?? user?.staffProfile?.subject);
   const classLabel = data?.schoolClass?.label ?? 'Your class';
   const classOptions = data?.assignedClasses?.length
     ? data.assignedClasses
-    : assignedClasses.map((c) => ({
+    : profileClasses.map((c) => ({
         id: c.id,
         name: c.name,
         section: c.section,
@@ -1140,7 +1430,7 @@ function GradesPage() {
         score,
         maxScore: data?.maxScore ?? 100,
       });
-      await load();
+      await load(selectedClassId || undefined);
     } catch (err) {
       setSaveError(apiErrorMessage(err, 'Could not save mark'));
     } finally {
@@ -1152,24 +1442,34 @@ function GradesPage() {
     <>
       <SectionHeader
         title="Grades"
-        subtitle={`${subjectLabel} marks · ${classLabel}`}
-        action={
-          classOptions.length > 1 ? (
-            <select
-              value={selectedClassId}
-              onChange={(event) => setSelectedClassId(event.target.value)}
-              aria-label="Class"
-              className="h-10 rounded-lg border border-gray-200 bg-white px-3 text-sm text-gray-700 focus:border-blue-600 focus:outline-none focus:ring-1 focus:ring-blue-600"
-            >
-              {classOptions.map((item) => (
-                <option key={item.id} value={item.id}>
-                  {item.label || formatClassLabel(item)}
-                </option>
-              ))}
-            </select>
-          ) : undefined
+        subtitle={
+          classOptions.length
+            ? `Enter ${subjectLabel} marks for students in your assigned classes`
+            : 'Ask admin to assign teaching classes and a subject first'
         }
       />
+
+      <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+        <p className="text-sm text-gray-500">
+          {data
+            ? `${classLabel} · ${subjectLabel} / ${data.maxScore}`
+            : 'Select a class to enter marks'}
+        </p>
+        <select
+          value={selectedClassId}
+          onChange={(event) => setSelectedClassId(event.target.value)}
+          aria-label="Filter by class"
+          disabled={!classOptions.length}
+          className="h-10 w-full rounded-lg border border-gray-200 bg-white px-3 text-sm text-gray-900 focus:border-blue-600 focus:outline-none focus:ring-1 focus:ring-blue-600 disabled:cursor-not-allowed disabled:bg-gray-50 sm:w-56"
+        >
+          {!classOptions.length && <option value="">No classes assigned</option>}
+          {classOptions.map((item) => (
+            <option key={item.id} value={item.id}>
+              {item.label || formatClassLabel(item)}
+            </option>
+          ))}
+        </select>
+      </div>
 
       {loading && <p className="text-sm text-gray-500">Loading students...</p>}
       {error && <p className="mb-4 text-sm text-red-600">{error}</p>}
@@ -1277,7 +1577,9 @@ function GradesPage() {
 
           {!data.students.length && (
             <Card className="mt-3 p-6 text-center">
-              <p className="text-sm text-gray-500">No students in your assigned class yet.</p>
+              <p className="text-sm text-gray-500">
+                No students in {classLabel} yet. Add students to this class first.
+              </p>
             </Card>
           )}
         </>
@@ -2302,6 +2604,332 @@ function LeavePage() {
   );
 }
 
+function TimetablePage() {
+  const { user } = useAuth();
+  const assignedClasses = staffAssignedClasses(user?.staffProfile);
+  const [periods, setPeriods] = useState<TimetablePeriodRow[]>([]);
+  const [draft, setDraft] = useState<Record<string, string>>({});
+  const [saved, setSaved] = useState<Record<string, string>>({});
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [saveMessage, setSaveMessage] = useState('');
+  const [busyKey, setBusyKey] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [addOpen, setAddOpen] = useState(false);
+  const [newStart, setNewStart] = useState('16:00');
+  const [newEnd, setNewEnd] = useState('17:00');
+  const [formError, setFormError] = useState('');
+
+  const buildDraft = (rows: TimetablePeriodRow[]) => {
+    const next: Record<string, string> = {};
+    for (const period of rows) {
+      for (const day of WEEK_DAYS) {
+        next[`${period.id}:${day}`] = period.entriesByDay?.[day]?.schoolClassId ?? '';
+      }
+    }
+    return next;
+  };
+
+  const load = async () => {
+    setError('');
+    try {
+      const { data } = await api.get('/timetable/mine');
+      const rows = (data.periods ?? []) as TimetablePeriodRow[];
+      setPeriods(rows);
+      const snapshot = buildDraft(rows);
+      setDraft(snapshot);
+      setSaved(snapshot);
+      setSaveMessage('');
+    } catch (err) {
+      setError(apiErrorMessage(err, 'Could not load timetable.'));
+      setPeriods([]);
+      setDraft({});
+      setSaved({});
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    load().catch(console.error);
+  }, []);
+
+  const dirtyKeys = Object.keys(draft).filter((key) => (draft[key] ?? '') !== (saved[key] ?? ''));
+  const isDirty = dirtyKeys.length > 0;
+
+  const setCell = (periodId: string, day: WeekDay, schoolClassId: string) => {
+    const key = `${periodId}:${day}`;
+    setDraft((prev) => ({ ...prev, [key]: schoolClassId }));
+    setSaveMessage('');
+    setError('');
+  };
+
+  const saveTimetable = async () => {
+    if (!isDirty) return;
+    setSaving(true);
+    setError('');
+    setSaveMessage('');
+    try {
+      await Promise.all(
+        dirtyKeys.map((key) => {
+          const [periodId, dayOfWeek] = key.split(':');
+          return api.put('/timetable/entries', {
+            periodId,
+            dayOfWeek,
+            schoolClassId: draft[key] || null,
+          });
+        }),
+      );
+      await load();
+      setSaveMessage('Timetable saved.');
+    } catch (err) {
+      setError(apiErrorMessage(err, 'Could not save timetable.'));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const discardChanges = () => {
+    setDraft({ ...saved });
+    setSaveMessage('');
+    setError('');
+  };
+
+  const addPeriod = async (event: FormEvent) => {
+    event.preventDefault();
+    if (isDirty) {
+      setFormError('Save or discard your class changes before adding a period.');
+      return;
+    }
+    setFormError('');
+    setBusyKey('add');
+    try {
+      await api.post('/timetable/periods', {
+        startTime: newStart,
+        endTime: newEnd,
+      });
+      setAddOpen(false);
+      await load();
+    } catch (err) {
+      setFormError(apiErrorMessage(err, 'Could not add period.'));
+    } finally {
+      setBusyKey(null);
+    }
+  };
+
+  const removePeriod = async (periodId: string) => {
+    if (isDirty) {
+      setError('Save or discard your class changes before removing a period.');
+      return;
+    }
+    setBusyKey(`del:${periodId}`);
+    setError('');
+    try {
+      await api.delete(`/timetable/periods/${periodId}`);
+      await load();
+    } catch (err) {
+      setError(apiErrorMessage(err, 'Could not remove period.'));
+    } finally {
+      setBusyKey(null);
+    }
+  };
+
+  return (
+    <>
+      <SectionHeader
+        title="Timetable"
+        subtitle="Assign classes for each day, then save your changes"
+        action={
+          <div className="flex flex-wrap items-center gap-2">
+            {isDirty && (
+              <button
+                type="button"
+                onClick={discardChanges}
+                disabled={saving}
+                className="inline-flex h-10 items-center justify-center rounded-lg border border-gray-200 px-3 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+              >
+                Discard
+              </button>
+            )}
+            <PrimaryButton
+              onClick={() => {
+                void saveTimetable();
+              }}
+              disabled={!isDirty || saving || loading}
+            >
+              {saving ? 'Saving...' : 'Save timetable'}
+            </PrimaryButton>
+            <button
+              type="button"
+              onClick={() => {
+                setFormError('');
+                setAddOpen(true);
+              }}
+              className="inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-gray-200 bg-white px-3 text-sm font-medium text-gray-700 hover:bg-gray-50"
+            >
+              <Plus className="h-4 w-4" />
+              Add period
+            </button>
+          </div>
+        }
+      />
+
+      {!assignedClasses.length && (
+        <Card className="mb-4 border border-amber-200 bg-amber-50 p-4">
+          <p className="text-sm text-amber-800">
+            Ask admin to assign teaching classes first — then you can place them in this grid.
+          </p>
+        </Card>
+      )}
+
+      {loading && <p className="text-sm text-gray-500">Loading timetable...</p>}
+      {error && <p className="mb-4 text-sm text-red-600">{error}</p>}
+      {saveMessage && <p className="mb-4 text-sm text-emerald-700">{saveMessage}</p>}
+      {isDirty && !saving && (
+        <p className="mb-3 text-sm text-amber-700">You have unsaved changes.</p>
+      )}
+
+      {!loading && (
+        <div className="overflow-x-auto rounded-xl border border-gray-200 bg-white">
+          <table className="min-w-[720px] w-full border-collapse text-sm">
+            <thead>
+              <tr className="bg-gray-50 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
+                <th className="sticky left-0 z-10 bg-gray-50 px-3 py-3">Time</th>
+                {WEEK_DAYS.map((day) => (
+                  <th key={day} className="px-2 py-3 text-center">
+                    {WEEK_DAY_LABELS[day]}
+                  </th>
+                ))}
+                <th className="px-2 py-3 text-right"> </th>
+              </tr>
+            </thead>
+            <tbody>
+              {periods.map((period) => (
+                <tr key={period.id} className="border-t border-gray-100">
+                  <td className="sticky left-0 z-10 bg-white px-3 py-2 font-medium text-gray-900 whitespace-nowrap">
+                    {formatClockLabel(period.startTime)} – {formatClockLabel(period.endTime)}
+                  </td>
+                  {WEEK_DAYS.map((day) => {
+                    const key = `${period.id}:${day}`;
+                    const value = draft[key] ?? '';
+                    const changed = value !== (saved[key] ?? '');
+                    return (
+                      <td key={day} className="px-1.5 py-2">
+                        <select
+                          value={value}
+                          disabled={saving || !assignedClasses.length}
+                          onChange={(event) => {
+                            setCell(period.id, day, event.target.value);
+                          }}
+                          className={cn(
+                            'h-9 w-full min-w-[5.5rem] rounded-lg border bg-white px-2 text-xs text-gray-800 focus:border-blue-600 focus:outline-none focus:ring-1 focus:ring-blue-600 disabled:bg-gray-50',
+                            changed ? 'border-amber-400' : 'border-gray-200',
+                          )}
+                        >
+                          <option value="">—</option>
+                          {assignedClasses.map((item) => (
+                            <option key={item.id} value={item.id}>
+                              {formatClassLabel(item)}
+                            </option>
+                          ))}
+                        </select>
+                      </td>
+                    );
+                  })}
+                  <td className="px-2 py-2 text-right">
+                    <IconButton
+                      label="Remove period"
+                      onClick={() => {
+                        if (saving || busyKey) return;
+                        void removePeriod(period.id);
+                      }}
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </IconButton>
+                  </td>
+                </tr>
+              ))}
+              {!periods.length && (
+                <tr>
+                  <td colSpan={9} className="px-4 py-8 text-center text-sm text-gray-500">
+                    No periods yet. Add a time slot to start building your week.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {!loading && periods.length > 0 && (
+        <div className="mt-4 flex flex-wrap items-center justify-end gap-2">
+          {isDirty && (
+            <button
+              type="button"
+              onClick={discardChanges}
+              disabled={saving}
+              className="inline-flex h-10 items-center justify-center rounded-lg border border-gray-200 px-4 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+            >
+              Discard
+            </button>
+          )}
+          <PrimaryButton
+            onClick={() => {
+              void saveTimetable();
+            }}
+            disabled={!isDirty || saving}
+          >
+            {saving ? 'Saving...' : 'Save timetable'}
+          </PrimaryButton>
+        </div>
+      )}
+
+      {addOpen && (
+        <Modal onClose={() => !busyKey && setAddOpen(false)}>
+          <h2 className="text-lg font-semibold text-gray-900">Add timetable period</h2>
+          <form onSubmit={addPeriod} className="mt-4 space-y-3">
+            <div className="grid grid-cols-2 gap-3">
+              <label className="block text-sm text-gray-700">
+                Start time
+                <input
+                  type="time"
+                  required
+                  value={newStart}
+                  onChange={(event) => setNewStart(event.target.value)}
+                  className="mt-1.5 h-10 w-full rounded-lg border border-gray-200 px-3 text-sm focus:border-blue-600 focus:outline-none focus:ring-1 focus:ring-blue-600"
+                />
+              </label>
+              <label className="block text-sm text-gray-700">
+                End time
+                <input
+                  type="time"
+                  required
+                  value={newEnd}
+                  onChange={(event) => setNewEnd(event.target.value)}
+                  className="mt-1.5 h-10 w-full rounded-lg border border-gray-200 px-3 text-sm focus:border-blue-600 focus:outline-none focus:ring-1 focus:ring-blue-600"
+                />
+              </label>
+            </div>
+            {formError && <p className="text-sm text-red-600">{formError}</p>}
+            <div className="flex justify-end gap-2 pt-1">
+              <button
+                type="button"
+                onClick={() => !busyKey && setAddOpen(false)}
+                className="inline-flex h-10 items-center justify-center rounded-lg border border-gray-200 px-4 text-sm font-medium text-gray-700 hover:bg-gray-50"
+              >
+                Cancel
+              </button>
+              <PrimaryButton type="submit" disabled={busyKey === 'add'}>
+                {busyKey === 'add' ? 'Adding...' : 'Add period'}
+              </PrimaryButton>
+            </div>
+          </form>
+        </Modal>
+      )}
+    </>
+  );
+}
+
 function MessagesPage({
   onUnreadChange,
 }: {
@@ -2389,6 +3017,7 @@ const PAGES = {
   attendance: AttendancePage,
   grades: GradesPage,
   assignments: AssignmentsPage,
+  timetable: TimetablePage,
   leave: LeavePage,
   announcements: AnnouncementsPage,
 };
@@ -2554,7 +3183,11 @@ export default function StaffPortal() {
 
         <main className="flex-1 overflow-y-auto px-4 py-5 md:px-8 md:py-7">
           {page === 'dashboard' ? (
-            <DashboardPage teacherName={displayName} onViewAssignments={() => goTo('assignments')} />
+            <DashboardPage
+              teacherName={displayName}
+              onViewAssignments={() => goTo('assignments')}
+              onViewTimetable={() => goTo('timetable')}
+            />
           ) : (
             <StaffPage
               page={page}

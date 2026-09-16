@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useState } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
 import api from '../api/client';
 
 function formatClassLabel(name: string, section?: string | null) {

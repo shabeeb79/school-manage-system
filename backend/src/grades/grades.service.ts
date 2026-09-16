@@ -242,7 +242,8 @@ export class GradesService {
       assignedClasses: classIds.map((id) => {
         const cls =
           staff.classAssignments.find((a) => a.schoolClassId === id)
-            ?.schoolClass ?? null;
+            ?.schoolClass ??
+          (staff.assignedClassId === id ? staff.assignedClass : null);
         return cls
           ? {
               id: cls.id,
@@ -312,7 +313,10 @@ export class GradesService {
   async upsertStaffMark(staffUserId: string, dto: UpsertStaffMarkDto) {
     const staff = await this.prisma.staffProfile.findUnique({
       where: { userId: staffUserId },
-      include: { classAssignments: { select: { schoolClassId: true } } },
+      include: {
+        assignedClass: true,
+        classAssignments: { select: { schoolClassId: true } },
+      },
     });
     const classIds = staff ? assignedClassIdsFromStaff(staff) : [];
     if (!classIds.length || !staff?.subject) {

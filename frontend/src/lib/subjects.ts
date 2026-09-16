@@ -1,15 +1,17 @@
-export enum TeachingSubject {
-  ARABIC = 'ARABIC',
-  ENGLISH = 'ENGLISH',
-  MALAYALAM = 'MALAYALAM',
-  MATHEMATICS = 'MATHEMATICS',
-  SOCIAL_SCIENCE = 'SOCIAL_SCIENCE',
-  HINDI = 'HINDI',
-  CHEMISTRY = 'CHEMISTRY',
-  BIOLOGY = 'BIOLOGY',
-  PHYSICS = 'PHYSICS',
-  IT = 'IT',
-}
+export const TeachingSubject = {
+  ARABIC: 'ARABIC',
+  ENGLISH: 'ENGLISH',
+  MALAYALAM: 'MALAYALAM',
+  MATHEMATICS: 'MATHEMATICS',
+  SOCIAL_SCIENCE: 'SOCIAL_SCIENCE',
+  HINDI: 'HINDI',
+  CHEMISTRY: 'CHEMISTRY',
+  BIOLOGY: 'BIOLOGY',
+  PHYSICS: 'PHYSICS',
+  IT: 'IT',
+} as const;
+
+export type TeachingSubject = (typeof TeachingSubject)[keyof typeof TeachingSubject];
 
 export const TEACHING_SUBJECTS = [
   TeachingSubject.ARABIC,

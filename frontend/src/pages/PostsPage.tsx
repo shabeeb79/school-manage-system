@@ -1,12 +1,10 @@
-import { FormEvent, useEffect, useState } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
 import api from '../api/client';
 
 const audiences = ['ALL', 'STAFF', 'STUDENT'];
 
 export default function PostsPage() {
   const [posts, setPosts] = useState<any[]>([]);
-  const [classes, setClasses] = useState<any[]>([]);
-  const [users, setUsers] = useState<any[]>([]);
   const [form, setForm] = useState({
     title: '',
     content: '',
@@ -17,14 +15,12 @@ export default function PostsPage() {
   const [error, setError] = useState('');
 
   const load = async () => {
-    const [p, c, u] = await Promise.all([
+    const [p] = await Promise.all([
       api.get('/posts'),
       api.get('/classes'),
       api.get('/users'),
     ]);
     setPosts(p.data);
-    setClasses(c.data);
-    setUsers(u.data);
   };
 
   useEffect(() => {

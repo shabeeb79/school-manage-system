@@ -92,6 +92,7 @@ model User {
   postTargets            PostTarget[]
   postReads              PostRead[]
   assignmentReads        AssignmentRead[]
+  timetablePeriods       TimetablePeriod[]
 
   @@map("users")
 }
@@ -109,6 +110,7 @@ model SchoolClass {
   posts            Post[]
   attendance       Attendance[]
   assignments      Assignment[]
+  timetableEntries TimetableEntry[]
 
   @@map("classes")
 }
@@ -367,4 +369,46 @@ model Message {
   @@index([senderId, receiverId, createdAt])
   @@index([receiverId, isRead])
   @@map("messages")
+}
+
+enum WeekDay {
+  MONDAY
+  TUESDAY
+  WEDNESDAY
+  THURSDAY
+  FRIDAY
+  SATURDAY
+  SUNDAY
+}
+
+/** A time row in a staff weekly timetable (e.g. 09:00–10:00). */
+model TimetablePeriod {
+  id          String   @id @default(uuid())
+  staffUserId String
+  startTime   String
+  endTime     String
+  sortOrder   Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  staff   User             @relation(fields: [staffUserId], references: [id], onDelete: Cascade)
+  entries TimetableEntry[]
+
+  @@index([staffUserId, sortOrder])
+  @@map("timetable_periods")
+}
+
+/** Class assigned to one day within a timetable period. */
+model TimetableEntry {
+  id            String  @id @default(uuid())
+  periodId      String
+  dayOfWeek     WeekDay
+  schoolClassId String?
+
+  period      TimetablePeriod @relation(fields: [periodId], references: [id], onDelete: Cascade)
+  schoolClass SchoolClass?    @relation(fields: [schoolClassId], references: [id], onDelete: SetNull)
+
+  @@unique([periodId, dayOfWeek])
+  @@index([schoolClassId])
+  @@map("timetable_entries")
 }
