@@ -6,6 +6,16 @@ import { listTake } from '../common/pagination';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreatePostDto } from './dto/create-post.dto';
 
+type FeedUser = {
+  id: string;
+  role: UserRole;
+  studentProfile?: { schoolClassId?: string | null } | null;
+  staffProfile?: {
+    assignedClassId?: string | null;
+    classAssignments?: { schoolClassId: string }[];
+  } | null;
+};
+
 @Injectable()
 export class PostsService {
   constructor(private prisma: PrismaService) {}
@@ -30,13 +40,20 @@ export class PostsService {
     }
 
     const { targetUserIds, ...data } = dto;
+    const targetClassId =
+      data.targetClassId && String(data.targetClassId).trim()
+        ? String(data.targetClassId).trim()
+        : undefined;
+
     return this.prisma.post.create({
       data: {
-        ...data,
-        targetClassId: data.targetClassId || undefined,
+        title: data.title,
+        content: data.content,
+        audience: data.audience,
+        isPublished: data.isPublished ?? true,
+        targetClassId,
         authorId,
-        fileUrl,
-        mediaType,
+        ...(fileUrl ? { fileUrl, mediaType } : {}),
         targets: targetUserIds?.length
           ? { create: targetUserIds.map((userId) => ({ userId })) }
           : undefined,
@@ -45,7 +62,9 @@ export class PostsService {
         author: {
           select: { id: true, firstName: true, lastName: true, role: true },
         },
-        targetClass: true,
+        targetClass: {
+          select: { id: true, name: true, section: true, academicYear: true },
+        },
         targets: {
           include: {
             user: { select: { id: true, firstName: true, lastName: true } },
@@ -55,15 +74,7 @@ export class PostsService {
     });
   }
 
-  private feedVisibilityWhere(user: {
-    id: string;
-    role: UserRole;
-    studentProfile?: { schoolClassId?: string | null } | null;
-    staffProfile?: {
-      assignedClassId?: string | null;
-      classAssignments?: { schoolClassId: string }[];
-    } | null;
-  }): Prisma.PostWhereInput {
+  private feedVisibilityWhere(user: FeedUser): Prisma.PostWhereInput {
     const staffClassIds = [
       user.staffProfile?.assignedClassId,
       ...(user.staffProfile?.classAssignments ?? []).map((a) => a.schoolClassId),
@@ -109,32 +120,45 @@ export class PostsService {
     return { isPublished: true, OR: audienceOr };
   }
 
-  async feed(user: {
-    id: string;
-    role: UserRole;
-    studentProfile?: { schoolClassId?: string | null } | null;
-    staffProfile?: {
-      assignedClassId?: string | null;
-      classAssignments?: { schoolClassId: string }[];
-    } | null;
-  }) {
+  private unreadWhere(user: FeedUser): Prisma.PostWhereInput {
+    return {
+      AND: [
+        this.feedVisibilityWhere(user),
+        { authorId: { not: user.id } },
+        { reads: { none: { userId: user.id } } },
+      ],
+    };
+  }
+
+  async feed(user: FeedUser) {
     const posts = await this.prisma.post.findMany({
       where: this.feedVisibilityWhere(user),
-      include: {
+      select: {
+        id: true,
+        title: true,
+        content: true,
+        audience: true,
+        targetClassId: true,
+        authorId: true,
+        fileUrl: true,
+        mediaType: true,
+        isPublished: true,
+        createdAt: true,
+        updatedAt: true,
         author: {
           select: { id: true, firstName: true, lastName: true, role: true },
         },
         targetClass: {
-          select: { id: true, name: true, section: true, academicYear: true },
+          select: { id: true, name: true, section: true },
         },
-        targets: { select: { userId: true } },
         reads: {
           where: { userId: user.id },
           select: { id: true },
+          take: 1,
         },
       },
       orderBy: { createdAt: 'desc' },
-      take: listTake(undefined, 100, 200),
+      take: listTake(undefined, 40, 60),
     });
 
     return posts.map(({ reads, ...post }) => ({
@@ -143,43 +167,45 @@ export class PostsService {
     }));
   }
 
-  async unreadCount(user: {
-    id: string;
-    role: UserRole;
-    studentProfile?: { schoolClassId?: string | null } | null;
-    staffProfile?: {
-      assignedClassId?: string | null;
-      classAssignments?: { schoolClassId: string }[];
-    } | null;
-  }) {
-    const feed = await this.feed(user);
-    return { count: feed.filter((post) => post.isUnread).length };
+  /** Lightweight count — does not load post bodies. */
+  async unreadCount(user: FeedUser) {
+    const count = await this.prisma.post.count({
+      where: this.unreadWhere(user),
+    });
+    return { count };
   }
 
-  async markFeedRead(user: {
-    id: string;
-    role: UserRole;
-    studentProfile?: { schoolClassId?: string | null } | null;
-    staffProfile?: {
-      assignedClassId?: string | null;
-      classAssignments?: { schoolClassId: string }[];
-    } | null;
-  }) {
-    const feed = await this.feed(user);
-    const unreadIds = feed.filter((post) => post.isUnread).map((post) => post.id);
-    if (!unreadIds.length) return { marked: 0 };
+  /** Mark unread visible posts as read without loading full feed payloads. */
+  async markFeedRead(user: FeedUser) {
+    const unread = await this.prisma.post.findMany({
+      where: this.unreadWhere(user),
+      select: { id: true },
+      take: 200,
+    });
+    if (!unread.length) return { marked: 0 };
 
     await this.prisma.postRead.createMany({
-      data: unreadIds.map((postId) => ({ postId, userId: user.id })),
+      data: unread.map((post) => ({ postId: post.id, userId: user.id })),
       skipDuplicates: true,
     });
 
-    return { marked: unreadIds.length };
+    return { marked: unread.length };
   }
 
   findAll() {
     return this.prisma.post.findMany({
-      include: {
+      select: {
+        id: true,
+        title: true,
+        content: true,
+        audience: true,
+        targetClassId: true,
+        authorId: true,
+        fileUrl: true,
+        mediaType: true,
+        isPublished: true,
+        createdAt: true,
+        updatedAt: true,
         author: {
           select: { id: true, firstName: true, lastName: true, role: true },
         },
@@ -187,13 +213,14 @@ export class PostsService {
           select: { id: true, name: true, section: true, academicYear: true },
         },
         targets: {
-          include: {
+          select: {
+            userId: true,
             user: { select: { id: true, firstName: true, lastName: true } },
           },
         },
       },
       orderBy: { createdAt: 'desc' },
-      take: listTake(undefined, 100, 200),
+      take: listTake(undefined, 50, 100),
     });
   }
 

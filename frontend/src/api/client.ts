@@ -1,5 +1,11 @@
 import axios, { type AxiosRequestConfig, type AxiosResponse } from 'axios';
 
+declare module 'axios' {
+  export interface AxiosRequestConfig {
+    skipCache?: boolean;
+  }
+}
+
 const api = axios.create({
   baseURL: import.meta.env.VITE_API_URL || 'http://localhost:3000/api',
 });

@@ -28,6 +28,7 @@ import {
 import { MAX_ASSIGNMENT_MEDIA_BYTES, mediaUrl } from './lib/media';
 import { startPortalNotifications } from './lib/notifications';
 import { useKeepAlivePages } from './lib/keepAlive';
+import { useToast } from './lib/toast';
 import { teachingSubjectLabel } from './lib/subjects';
 import {
   emitUnreadChanged,
@@ -36,7 +37,7 @@ import {
   markAssignmentRead,
   type UnreadCounts,
 } from './lib/unread';
-import { IconButton, Modal, PostMedia } from './ui';
+import { IconButton, ListSkeleton, Modal, PostMedia } from './ui';
 
 type PageId =
   | 'dashboard'
@@ -309,7 +310,7 @@ function DashboardPage({
     let active = true;
     (async () => {
       try {
-        const { data } = await api.get('/attendance');
+        const { data } = await api.get('/attendance', { skipCache: true });
         if (!active) return;
         const records = data as Array<{ status: string }>;
         const total = records.length;
@@ -339,7 +340,7 @@ function DashboardPage({
     (async () => {
       setAssignmentsLoading(true);
       try {
-        const { data } = await api.get('/assignments');
+        const { data } = await api.get('/assignments', { skipCache: true });
         if (!active) return;
         const list = (data as Array<{
           id: string;
@@ -502,14 +503,19 @@ function AnnouncementsPage() {
     (async () => {
       setError('');
       try {
-        const { data } = await api.get('/posts/feed');
-        if (active) setPosts(data);
-        await markAnnouncementsRead();
-        emitUnreadChanged();
+        // Always fetch fresh so new admin posts show; do not wait on mark-read.
+        const { data } = await api.get('/posts/feed', { skipCache: true });
+        if (!active) return;
+        setPosts(data);
+        setLoading(false);
+        void markAnnouncementsRead()
+          .then(() => emitUnreadChanged())
+          .catch(() => undefined);
       } catch {
-        if (active) setError('Could not load announcements.');
-      } finally {
-        if (active) setLoading(false);
+        if (active) {
+          setError('Could not load announcements.');
+          setLoading(false);
+        }
       }
     })().catch(console.error);
     return () => {
@@ -523,7 +529,7 @@ function AnnouncementsPage() {
         title="Announcements"
         subtitle={`School notices for ${className}`}
       />
-      {loading && <p className="text-sm text-gray-500">Loading announcements...</p>}
+      {loading && <ListSkeleton />}
       {error && <p className="mb-4 text-sm text-red-600">{error}</p>}
       {!loading && !error && (
         <div className="space-y-3">
@@ -599,7 +605,7 @@ function AttendancePage() {
     (async () => {
       setError('');
       try {
-        const { data } = await api.get('/attendance');
+        const { data } = await api.get('/attendance', { skipCache: true });
         if (active) setRecords(data);
       } catch (err) {
         if (active) setError(apiErrorMessage(err, 'Could not load attendance.'));
@@ -660,7 +666,7 @@ function AttendancePage() {
         subtitle="Updated each day when your teacher marks the register"
       />
 
-      {loading && <p className="text-sm text-gray-500">Loading attendance...</p>}
+      {loading && <ListSkeleton />}
       {error && <p className="mb-4 text-sm text-red-600">{error}</p>}
 
       {!loading && !error && (
@@ -764,7 +770,7 @@ function GradesPage() {
     (async () => {
       setError('');
       try {
-        const { data } = await api.get('/grades/my-card');
+        const { data } = await api.get('/grades/my-card', { skipCache: true });
         if (active) setCard(data);
       } catch (err) {
         if (active) setError(apiErrorMessage(err, 'Could not load grade card.'));
@@ -786,7 +792,7 @@ function GradesPage() {
         subtitle={card?.examName ?? 'Term assessment summary'}
       />
 
-      {loading && <p className="text-sm text-gray-500">Loading grade card...</p>}
+      {loading && <ListSkeleton />}
       {error && <p className="mb-4 text-sm text-red-600">{error}</p>}
 
       {!loading && !error && card && (
@@ -945,6 +951,7 @@ function formatStudentDue(date: string) {
 const MAX_SUBMISSION_ATTEMPTS = 3;
 
 function AssignmentsPage() {
+  const toast = useToast();
   const [assignments, setAssignments] = useState<StudentAssignment[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -957,7 +964,7 @@ function AssignmentsPage() {
   const load = async () => {
     setError('');
     try {
-      const { data } = await api.get('/assignments');
+      const { data } = await api.get('/assignments', { skipCache: true });
       setAssignments(data);
     } catch {
       setError('Could not load assignments.');
@@ -1033,6 +1040,7 @@ function AssignmentsPage() {
       setFile(null);
       setNote('');
       await load();
+      toast.success('Assignment submitted successfully');
     } catch (err: unknown) {
       const message =
         (err as { response?: { data?: { message?: string | string[] } } })?.response?.data
@@ -1193,7 +1201,7 @@ function AssignmentsPage() {
         title="Assignments"
         subtitle="Assignments published by your teachers for your class"
       />
-      {loading && <p className="text-sm text-gray-500">Loading assignments...</p>}
+      {loading && <ListSkeleton />}
       {error && <p className="mb-4 text-sm text-rose-600">{error}</p>}
       <div className="space-y-3">
         {assignments.map((item) => {
@@ -1241,6 +1249,7 @@ function AssignmentsPage() {
 }
 
 function LeavePage() {
+  const toast = useToast();
   const [items, setItems] = useState<ApiLeave[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -1252,7 +1261,7 @@ function LeavePage() {
   const load = async () => {
     setError('');
     try {
-      const { data } = await api.get('/leave');
+      const { data } = await api.get('/leave', { skipCache: true });
       setItems(data);
     } catch {
       setError('Could not load leave requests.');
@@ -1283,6 +1292,7 @@ function LeavePage() {
       });
       setModalOpen(false);
       await load();
+      toast.success('Leave request submitted successfully');
     } catch (err: unknown) {
       setFormError(apiErrorMessage(err, 'Could not submit leave request'));
     } finally {
@@ -1302,7 +1312,7 @@ function LeavePage() {
         }
       />
 
-      {loading && <p className="text-sm text-gray-500">Loading leave requests...</p>}
+      {loading && <ListSkeleton />}
       {error && <p className="mb-4 text-sm text-red-600">{error}</p>}
 
       {!loading && !error && (
@@ -1475,7 +1485,9 @@ export default function StudentPortal() {
     assignments: 0,
     messages: 0,
   });
-  const { visited, epoch } = useKeepAlivePages(page, 'dashboard');
+  const { visited, epoch } = useKeepAlivePages(page, 'dashboard', {
+    keep: ['dashboard'],
+  });
 
   const firstName = user?.firstName ?? STUDENT.firstName;
   const displayName = user ? `${user.firstName} ${user.lastName}` : STUDENT.name;

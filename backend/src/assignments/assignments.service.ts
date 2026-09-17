@@ -103,6 +103,63 @@ export class AssignmentsService {
             role: true,
           },
         },
+        // Students only need their own submission; staff loads submissions on detail.
+        submissions:
+          user.role === UserRole.STUDENT
+            ? { where: { studentId: user.id } }
+            : false,
+        _count: { select: { submissions: true } },
+        reads:
+          user.role === UserRole.STUDENT
+            ? { where: { userId: user.id }, select: { id: true } }
+            : false,
+      },
+      orderBy: { dueDate: 'asc' },
+      take: listTake(undefined, 50, 100),
+    });
+
+    if (user.role !== UserRole.STUDENT) {
+      return assignments.map((assignment) => ({
+        ...assignment,
+        submissions: [] as [],
+      }));
+    }
+
+    return assignments.map(({ reads, ...assignment }) => ({
+      ...assignment,
+      isUnread:
+        assignment.createdById !== user.id &&
+        Array.isArray(reads) &&
+        reads.length === 0,
+    }));
+  }
+
+  async getOne(
+    id: string,
+    user: {
+      id: string;
+      role: UserRole;
+      studentProfile?: { schoolClassId?: string | null } | null;
+      staffProfile?: {
+        assignedClassId?: string | null;
+        classAssignments?: { schoolClassId: string }[];
+      } | null;
+    },
+  ) {
+    const assignment = await this.prisma.assignment.findUnique({
+      where: { id },
+      include: {
+        schoolClass: {
+          select: { id: true, name: true, section: true, academicYear: true },
+        },
+        createdBy: {
+          select: {
+            id: true,
+            firstName: true,
+            lastName: true,
+            role: true,
+          },
+        },
         submissions:
           user.role === UserRole.STUDENT
             ? { where: { studentId: user.id } }
@@ -126,21 +183,35 @@ export class AssignmentsService {
             ? { where: { userId: user.id }, select: { id: true } }
             : false,
       },
-      orderBy: { dueDate: 'asc' },
-      take: listTake(undefined, 100, 200),
     });
+    if (!assignment) throw new NotFoundException('Assignment not found');
 
-    if (user.role !== UserRole.STUDENT) {
-      return assignments;
+    if (user.role === UserRole.STAFF) {
+      const classIds = assignedClassIdsFromStaff({
+        assignedClassId: user.staffProfile?.assignedClassId,
+        classAssignments: user.staffProfile?.classAssignments,
+      });
+      if (!classIds.includes(assignment.schoolClassId)) {
+        throw new ForbiddenException('Not allowed to view this assignment');
+      }
+    } else if (user.role === UserRole.STUDENT) {
+      if (user.studentProfile?.schoolClassId !== assignment.schoolClassId) {
+        throw new ForbiddenException('Not allowed to view this assignment');
+      }
     }
 
-    return assignments.map(({ reads, ...assignment }) => ({
-      ...assignment,
-      isUnread:
-        assignment.createdById !== user.id &&
-        Array.isArray(reads) &&
-        reads.length === 0,
-    }));
+    if (user.role === UserRole.STUDENT) {
+      const { reads, ...rest } = assignment;
+      return {
+        ...rest,
+        isUnread:
+          rest.createdById !== user.id &&
+          Array.isArray(reads) &&
+          reads.length === 0,
+      };
+    }
+
+    return assignment;
   }
 
   async unreadCount(user: {
@@ -152,12 +223,19 @@ export class AssignmentsService {
     if (user.role !== UserRole.STUDENT) {
       return { count: 0 };
     }
-    const list = await this.list(user);
-    return {
-      count: list.filter(
-        (item) => 'isUnread' in item && Boolean((item as { isUnread?: boolean }).isUnread),
-      ).length,
-    };
+    if (!user.studentProfile?.schoolClassId) {
+      return { count: 0 };
+    }
+
+    const count = await this.prisma.assignment.count({
+      where: {
+        schoolClassId: user.studentProfile.schoolClassId,
+        createdBy: { role: { in: [UserRole.STAFF, UserRole.ADMIN] } },
+        createdById: { not: user.id },
+        reads: { none: { userId: user.id } },
+      },
+    });
+    return { count };
   }
 
   async markRead(assignmentId: string, userId: string) {

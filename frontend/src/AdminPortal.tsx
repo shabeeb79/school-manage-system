@@ -42,6 +42,7 @@ import {
 import { MAX_MEDIA_BYTES, mediaUrl } from './lib/media';
 import { startPortalNotifications } from './lib/notifications';
 import { useKeepAlivePages } from './lib/keepAlive';
+import { useToast } from './lib/toast';
 import {
   formatUnreadBadge,
   type UnreadCounts,
@@ -52,6 +53,7 @@ import {
   Card,
   ConfirmModal,
   IconButton,
+  ListSkeleton,
   Modal,
   PersonCell,
   PostMedia,
@@ -230,12 +232,12 @@ function DashboardPage() {
         const today = todayInputValue();
         const [todayRes, studentsRes, staffRes, leaveRes, classesRes, postsRes] =
           await Promise.all([
-            api.get('/attendance', { params: { date: today } }),
-            api.get('/users', { params: { role: 'STUDENT' } }),
-            api.get('/users', { params: { role: 'STAFF' } }),
-            api.get('/leave'),
-            api.get('/classes'),
-            api.get('/posts'),
+            api.get('/attendance', { skipCache: true, params: { date: today } }),
+            api.get('/users', { skipCache: true, params: { role: 'STUDENT' } }),
+            api.get('/users', { skipCache: true, params: { role: 'STAFF' } }),
+            api.get('/leave', { skipCache: true }),
+            api.get('/classes', { skipCache: true }),
+            api.get('/posts', { skipCache: true }),
           ]);
         if (!active) return;
 
@@ -292,7 +294,7 @@ function DashboardPage() {
           d.setDate(d.getDate() - i);
           const key = d.toISOString().slice(0, 10);
           const label = d.toLocaleDateString(undefined, { weekday: 'short' });
-          const { data } = await api.get('/attendance', { params: { date: key } });
+          const { data } = await api.get('/attendance', { skipCache: true, params: { date: key } });
           if (!active) return;
           const dayRecords = data as Array<{ status: string }>;
           const dayPresent = dayRecords.filter((r) => r.status === 'PRESENT').length;
@@ -598,6 +600,7 @@ function PostFormModal({
 }
 
 function PostsPage() {
+  const toast = useToast();
   const [posts, setPosts] = useState<ApiPost[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
@@ -612,7 +615,7 @@ function PostsPage() {
   const load = async () => {
     setLoadError('');
     try {
-      const { data } = await api.get('/posts');
+      const { data } = await api.get('/posts', { skipCache: true });
       setPosts(data);
     } catch {
       setLoadError('Could not load posts. Check that you are signed in as admin.');
@@ -673,6 +676,7 @@ function PostsPage() {
       setForm(EMPTY_POST_FORM);
       setFile(null);
       await load();
+      toast.success('Post created successfully');
     } catch (err: unknown) {
       setFormError(apiErrorMessage(err, 'Could not create post'));
     } finally {
@@ -696,6 +700,7 @@ function PostsPage() {
       await api.delete(`/posts/${pendingDelete.id}`);
       setPendingDelete(null);
       await load();
+      toast.success('Post deleted successfully');
     } catch (err: unknown) {
       setLoadError(apiErrorMessage(err, 'Could not delete post'));
       setPendingDelete(null);
@@ -716,7 +721,7 @@ function PostsPage() {
         }
       />
 
-      {loading && <p className="text-sm text-gray-500">Loading posts...</p>}
+      {loading && <ListSkeleton />}
       {loadError && <p className="mb-4 text-sm text-red-600">{loadError}</p>}
 
       {!loading && !loadError && (
@@ -1121,6 +1126,7 @@ function UserFormModal({
 }
 
 function UsersPage() {
+  const toast = useToast();
   const { user: currentUser } = useAuth();
   const [query, setQuery] = useState('');
   const [role, setRole] = useState('All roles');
@@ -1140,8 +1146,8 @@ function UsersPage() {
     setLoadError('');
     try {
       const [usersRes, classesRes] = await Promise.all([
-        api.get('/users'),
-        api.get('/classes'),
+        api.get('/users', { skipCache: true }),
+        api.get('/classes', { skipCache: true }),
       ]);
       setUsers(usersRes.data);
       setClasses(classesRes.data);
@@ -1247,6 +1253,7 @@ function UsersPage() {
       await api.delete(`/users/${pendingDelete.id}`);
       setPendingDelete(null);
       await load();
+      toast.success('User deleted successfully');
     } catch (err) {
       setLoadError(apiErrorMessage(err, 'Could not delete user'));
       setPendingDelete(null);
@@ -1259,6 +1266,7 @@ function UsersPage() {
     event.preventDefault();
     setBusy(true);
     setFormError('');
+    const wasAdd = modal === 'add';
     try {
       if (modal === 'add') {
         if (form.role === 'STUDENT') {
@@ -1328,6 +1336,9 @@ function UsersPage() {
       setModal(null);
       setEditingUserId(null);
       await load();
+      toast.success(
+        wasAdd ? 'User created successfully' : 'User updated successfully',
+      );
     } catch (err: unknown) {
       setFormError(apiErrorMessage(err, 'Could not save user'));
     } finally {
@@ -1368,7 +1379,7 @@ function UsersPage() {
         </select>
       </div>
 
-      {loading && <p className="text-sm text-gray-500">Loading users...</p>}
+      {loading && <ListSkeleton />}
       {loadError && <p className="mb-4 text-sm text-red-600">{loadError}</p>}
 
       {!loading && !loadError && (
@@ -1622,6 +1633,7 @@ function ClassFormModal({
 }
 
 function ClassesPage() {
+  const toast = useToast();
   const [items, setItems] = useState<ApiClass[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
@@ -1636,7 +1648,7 @@ function ClassesPage() {
   const load = async () => {
     setLoadError('');
     try {
-      const { data } = await api.get('/classes');
+      const { data } = await api.get('/classes', { skipCache: true });
       setItems(data);
     } catch (err) {
       setLoadError(apiErrorMessage(err, 'Could not load classes.'));
@@ -1678,6 +1690,7 @@ function ClassesPage() {
     event.preventDefault();
     setBusy(true);
     setFormError('');
+    const wasAdd = modal === 'add';
     const payload = {
       name: form.name.trim(),
       section: form.section.trim(),
@@ -1692,6 +1705,9 @@ function ClassesPage() {
       setModal(null);
       setEditingId(null);
       await load();
+      toast.success(
+        wasAdd ? 'Class created successfully' : 'Class updated successfully',
+      );
     } catch (err) {
       setFormError(apiErrorMessage(err, 'Could not save class'));
     } finally {
@@ -1715,6 +1731,7 @@ function ClassesPage() {
       await api.delete(`/classes/${pendingDelete.id}`);
       setPendingDelete(null);
       await load();
+      toast.success('Class deleted successfully');
     } catch (err) {
       setLoadError(apiErrorMessage(err, 'Could not delete class'));
       setPendingDelete(null);
@@ -1735,7 +1752,7 @@ function ClassesPage() {
         }
       />
 
-      {loading && <p className="text-sm text-gray-500">Loading classes...</p>}
+      {loading && <ListSkeleton />}
       {loadError && <p className="mb-4 text-sm text-red-600">{loadError}</p>}
 
       {!loading && !loadError && (
@@ -1883,8 +1900,8 @@ function AttendancePage() {
       const params: Record<string, string> = { date };
       if (classId !== 'all') params.schoolClassId = classId;
       const [classesRes, attendanceRes] = await Promise.all([
-        api.get('/classes'),
-        api.get('/attendance', { params }),
+        api.get('/classes', { skipCache: true }),
+        api.get('/attendance', { skipCache: true, params }),
       ]);
       setClasses(classesRes.data);
       setRecords(attendanceRes.data);
@@ -2022,7 +2039,7 @@ function AttendancePage() {
         </div>
       </div>
 
-      {loading && <p className="text-sm text-gray-500">Loading attendance...</p>}
+      {loading && <ListSkeleton />}
       {loadError && <p className="mb-4 text-sm text-red-600">{loadError}</p>}
 
       {!loading && !loadError && (
@@ -2131,7 +2148,7 @@ function GradesPage() {
   const load = async () => {
     setLoadError('');
     try {
-      const { data } = await api.get('/grades/toppers');
+      const { data } = await api.get('/grades/toppers', { skipCache: true });
       setSchoolTopper(data.schoolTopper);
       setSchoolPending(Boolean(data.schoolPending ?? !data.schoolTopper));
       setClassToppers(data.classToppers ?? []);
@@ -2153,7 +2170,7 @@ function GradesPage() {
         subtitle="Complete only after all 10 subjects are marked for every student"
       />
 
-      {loading && <p className="text-sm text-gray-500">Loading toppers...</p>}
+      {loading && <ListSkeleton />}
       {loadError && <p className="mb-4 text-sm text-red-600">{loadError}</p>}
 
       {!loading && !loadError && (
@@ -2271,7 +2288,7 @@ function LeavePage() {
   const load = async () => {
     setError('');
     try {
-      const { data } = await api.get('/leave');
+      const { data } = await api.get('/leave', { skipCache: true });
       setItems(data);
     } catch {
       setError('Could not load leave requests.');
@@ -2341,7 +2358,7 @@ function LeavePage() {
         subtitle="Approve teacher leave and monitor student leave status"
       />
 
-      {loading && <p className="text-sm text-gray-500">Loading leave requests...</p>}
+      {loading && <ListSkeleton />}
       {error && <p className="mb-4 text-sm text-red-600">{error}</p>}
 
       {!loading && (
@@ -2535,7 +2552,9 @@ export default function AdminPortal() {
     assignments: 0,
     messages: 0,
   });
-  const { visited, epoch } = useKeepAlivePages(page, 'dashboard');
+  const { visited, epoch } = useKeepAlivePages(page, 'dashboard', {
+    keep: ['dashboard'],
+  });
 
   const displayName = user ? `${user.firstName} ${user.lastName}` : 'Divya Menon';
   const displayRole = user?.role === 'ADMIN' ? 'Administrator' : user?.role ?? 'Administrator';

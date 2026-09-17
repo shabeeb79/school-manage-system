@@ -1,6 +1,7 @@
 import { lazy, Suspense } from 'react';
 import { AuthProvider, useAuth } from './auth/AuthContext';
 import LoginPage from './pages/LoginPage';
+import { ToastProvider } from './lib/toast';
 import { PortalSkeleton } from './ui';
 
 const AdminPortal = lazy(() => import('./AdminPortal'));
@@ -32,7 +33,9 @@ function PortalGate() {
 export default function App() {
   return (
     <AuthProvider>
-      <PortalGate />
+      <ToastProvider>
+        <PortalGate />
+      </ToastProvider>
     </AuthProvider>
   );
 }

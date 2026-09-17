@@ -83,6 +83,23 @@ export class AssignmentsController {
     return this.assignments.unreadCount(user);
   }
 
+  @Get(':id')
+  getOne(
+    @Param('id') id: string,
+    @CurrentUser()
+    user: {
+      id: string;
+      role: UserRole;
+      studentProfile?: { schoolClassId?: string | null } | null;
+      staffProfile?: {
+        assignedClassId?: string | null;
+        classAssignments?: { schoolClassId: string }[];
+      } | null;
+    },
+  ) {
+    return this.assignments.getOne(id, user);
+  }
+
   @Patch('read-all')
   markAllRead(
     @CurrentUser()

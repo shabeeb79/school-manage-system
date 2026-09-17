@@ -184,7 +184,7 @@ export function startPortalNotifications(options: PortalNotifyOptions) {
 
   const pollId = window.setInterval(() => {
     void refresh();
-  }, 15000);
+  }, 45000);
 
   const unsubUnread = (() => {
     const handler = () => {

@@ -37,6 +37,7 @@ import {
 import { mediaUrl } from './lib/media';
 import { startPortalNotifications } from './lib/notifications';
 import { useKeepAlivePages } from './lib/keepAlive';
+import { useToast } from './lib/toast';
 import { teachingSubjectLabel } from './lib/subjects';
 import {
   isStaffClassTeacher,
@@ -54,6 +55,7 @@ import {
   Badge,
   Card,
   IconButton,
+  ListSkeleton,
   Modal,
   PersonCell,
   PostMedia,
@@ -232,11 +234,11 @@ function DashboardPage({
         const today = todayInputValue();
         const [rosterRes, classRes, attendanceRes, assignmentsRes, timetableRes] =
           await Promise.all([
-            api.get('/users/my-students'),
-            api.get('/users/my-class-students'),
-            api.get('/attendance', { params: { date: today } }),
-            api.get('/assignments'),
-            api.get('/timetable/mine').catch(() => ({ data: { periods: [] } })),
+            api.get('/users/my-students', { skipCache: true }),
+            api.get('/users/my-class-students', { skipCache: true }),
+            api.get('/attendance', { skipCache: true, params: { date: today } }),
+            api.get('/assignments', { skipCache: true }),
+            api.get('/timetable/mine', { skipCache: true }).catch(() => ({ data: { periods: [] } })),
           ]);
         if (!active) return;
 
@@ -775,6 +777,7 @@ function StudentFormModal({
 }
 
 function StudentsPage() {
+  const toast = useToast();
   const { user } = useAuth();
   const [query, setQuery] = useState('');
   const [classFilter, setClassFilter] = useState('all');
@@ -799,7 +802,7 @@ function StudentsPage() {
   const load = async () => {
     setLoadError('');
     try {
-      const studentsRes = await api.get('/users/my-students');
+      const studentsRes = await api.get('/users/my-students', { skipCache: true });
       setStudents(studentsRes.data);
       setClasses(
         assignedClasses.map((c) => ({
@@ -875,6 +878,7 @@ function StudentsPage() {
     event.preventDefault();
     setBusy(true);
     setFormError('');
+    const wasAdd = modal === 'add';
     try {
       if (modal === 'add') {
         if (!form.schoolClassId) {
@@ -905,6 +909,9 @@ function StudentsPage() {
       setModal(null);
       setEditingUserId(null);
       await load();
+      toast.success(
+        wasAdd ? 'Student created successfully' : 'Student updated successfully',
+      );
     } catch (err: unknown) {
       const message =
         (err as { response?: { data?: { message?: string | string[] } } })?.response?.data?.message;
@@ -965,7 +972,7 @@ function StudentsPage() {
         </select>
       </div>
 
-      {loading && <p className="text-sm text-gray-500">Loading students...</p>}
+      {loading && <ListSkeleton />}
       {loadError && <p className="mb-4 text-sm text-red-600">{loadError}</p>}
 
       {!loading && !loadError && (
@@ -1123,8 +1130,9 @@ function AttendancePage() {
         return;
       }
       const [studentsRes, attendanceRes] = await Promise.all([
-        api.get('/users/my-class-students'),
+        api.get('/users/my-class-students', { skipCache: true }),
         api.get('/attendance', {
+          skipCache: true,
           params: { date, schoolClassId: assignedClassId },
         }),
       ]);
@@ -1233,7 +1241,7 @@ function AttendancePage() {
         }
       />
 
-      {loading && <p className="text-sm text-gray-500">Loading attendance...</p>}
+      {loading && <ListSkeleton />}
       {error && <p className="mb-4 text-sm text-red-600">{error}</p>}
       {saved && !error && (
         <p className="mb-4 text-sm font-medium text-green-700">
@@ -1359,7 +1367,7 @@ function GradesPage() {
         classId || selectedClassId
           ? { schoolClassId: classId || selectedClassId }
           : undefined;
-      const { data: payload } = await api.get('/grades/my-class', { params });
+      const { data: payload } = await api.get('/grades/my-class', { skipCache: true, params });
       setData(payload);
 
       const apiClasses = (payload.assignedClasses ?? []) as Array<{ id: string }>;
@@ -1472,7 +1480,7 @@ function GradesPage() {
         </select>
       </div>
 
-      {loading && <p className="text-sm text-gray-500">Loading students...</p>}
+      {loading && <ListSkeleton />}
       {error && <p className="mb-4 text-sm text-red-600">{error}</p>}
       {saveError && <p className="mb-4 text-sm text-red-600">{saveError}</p>}
 
@@ -1643,6 +1651,7 @@ function formatDue(date: string) {
 }
 
 function AssignmentsPage() {
+  const toast = useToast();
   const { user } = useAuth();
   const assignedClasses = staffAssignedClasses(user?.staffProfile);
   const primaryClassId = assignedClasses[0]?.id ?? '';
@@ -1678,8 +1687,8 @@ function AssignmentsPage() {
     setError('');
     try {
       const [assignmentsRes, studentsRes] = await Promise.all([
-        api.get('/assignments'),
-        api.get('/users/my-students'),
+        api.get('/assignments', { skipCache: true }),
+        api.get('/users/my-students', { skipCache: true }),
       ]);
       setAssignments(assignmentsRes.data);
       setAllStudents(studentsRes.data);
@@ -1734,6 +1743,16 @@ function AssignmentsPage() {
     setRemark('');
     setScore('');
     setReviewError('');
+    void (async () => {
+      try {
+        const { data } = await api.get(`/assignments/${id}`, { skipCache: true });
+        setAssignments((prev) =>
+          prev.map((item) => (item.id === id ? { ...item, ...data } : item)),
+        );
+      } catch {
+        setError('Could not load assignment details.');
+      }
+    })();
   };
 
   const openCreate = () => {
@@ -1809,6 +1828,7 @@ function AssignmentsPage() {
         schoolClassId: primaryClassId,
       });
       await load();
+      toast.success('Assignment created successfully');
     } catch (err: unknown) {
       const message =
         (err as { response?: { data?: { message?: string | string[] } } })?.response?.data?.message;
@@ -2122,7 +2142,7 @@ function AssignmentsPage() {
           </PrimaryButton>
         }
       />
-      {loading && <p className="text-sm text-gray-500">Loading assignments...</p>}
+      {loading && <ListSkeleton />}
       {error && <p className="mb-4 text-sm text-red-600">{error}</p>}
 
       {!loading && assignedClasses.length > 1 && (
@@ -2271,6 +2291,7 @@ function AssignmentsPage() {
 }
 
 function LeavePage() {
+  const toast = useToast();
   const { user } = useAuth();
   const [items, setItems] = useState<ApiLeave[]>([]);
   const [loading, setLoading] = useState(true);
@@ -2288,7 +2309,7 @@ function LeavePage() {
   const load = async () => {
     setError('');
     try {
-      const { data } = await api.get('/leave');
+      const { data } = await api.get('/leave', { skipCache: true });
       setItems(data);
     } catch {
       setError('Could not load leave requests.');
@@ -2325,6 +2346,7 @@ function LeavePage() {
       });
       setModalOpen(false);
       await load();
+      toast.success('Leave request submitted successfully');
     } catch (err: unknown) {
       setFormError(apiErrorMessage(err, 'Could not submit leave request'));
     } finally {
@@ -2382,7 +2404,7 @@ function LeavePage() {
         />
       </div>
 
-      {loading && <p className="text-sm text-gray-500">Loading leave requests...</p>}
+      {loading && <ListSkeleton />}
       {error && <p className="mb-4 text-sm text-red-600">{error}</p>}
 
       {!loading && (
@@ -2636,7 +2658,7 @@ function TimetablePage() {
   const load = async () => {
     setError('');
     try {
-      const { data } = await api.get('/timetable/mine');
+      const { data } = await api.get('/timetable/mine', { skipCache: true });
       const rows = (data.periods ?? []) as TimetablePeriodRow[];
       setPeriods(rows);
       const snapshot = buildDraft(rows);
@@ -2785,7 +2807,7 @@ function TimetablePage() {
         </Card>
       )}
 
-      {loading && <p className="text-sm text-gray-500">Loading timetable...</p>}
+      {loading && <ListSkeleton />}
       {error && <p className="mb-4 text-sm text-red-600">{error}</p>}
       {saveMessage && <p className="mb-4 text-sm text-emerald-700">{saveMessage}</p>}
       {isDirty && !saving && (
@@ -2957,14 +2979,18 @@ function AnnouncementsPage() {
     (async () => {
       setError('');
       try {
-        const { data } = await api.get('/posts/feed');
-        if (active) setPosts(data);
-        await markAnnouncementsRead();
-        emitUnreadChanged();
+        const { data } = await api.get('/posts/feed', { skipCache: true });
+        if (!active) return;
+        setPosts(data);
+        setLoading(false);
+        void markAnnouncementsRead()
+          .then(() => emitUnreadChanged())
+          .catch(() => undefined);
       } catch {
-        if (active) setError('Could not load announcements.');
-      } finally {
-        if (active) setLoading(false);
+        if (active) {
+          setError('Could not load announcements.');
+          setLoading(false);
+        }
       }
     })().catch(console.error);
     return () => {
@@ -2975,7 +3001,7 @@ function AnnouncementsPage() {
   return (
     <>
       <SectionHeader title="Announcements" subtitle="School notices and staff updates" />
-      {loading && <p className="text-sm text-gray-500">Loading announcements...</p>}
+      {loading && <ListSkeleton />}
       {error && <p className="mb-4 text-sm text-red-600">{error}</p>}
       {!loading && !error && (
         <div className="space-y-3">
@@ -3058,7 +3084,9 @@ export default function StaffPortal() {
     assignments: 0,
     messages: 0,
   });
-  const { visited, epoch } = useKeepAlivePages(page, 'dashboard');
+  const { visited, epoch } = useKeepAlivePages(page, 'dashboard', {
+    keep: ['dashboard'],
+  });
 
   const displayName = user ? `${user.firstName} ${user.lastName}` : TEACHER.name;
   const displayRole =
