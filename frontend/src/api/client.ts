@@ -1,21 +1,68 @@
-import axios from 'axios';
+import axios, { type AxiosRequestConfig, type AxiosResponse } from 'axios';
 
 const api = axios.create({
   baseURL: import.meta.env.VITE_API_URL || 'http://localhost:3000/api',
 });
 
-const GET_CACHE_TTL_MS = 30_000;
-type CacheEntry = { expiry: number; data: unknown; status: number; statusText: string; headers: unknown };
+type CacheEntry = {
+  data: unknown;
+  status: number;
+  statusText: string;
+  headers: unknown;
+};
+
 const getCache = new Map<string, CacheEntry>();
-const inflight = new Map<string, Promise<unknown>>();
+const inflight = new Map<string, Promise<AxiosResponse>>();
+
+type CacheableConfig = AxiosRequestConfig & {
+  /** Force a network request and refresh the cache entry. */
+  skipCache?: boolean;
+};
 
 function cacheKey(url: string, params?: unknown) {
   return `${url}::${JSON.stringify(params ?? null)}`;
 }
 
+/** Paths that must always hit the network (badges / live messaging). */
+function shouldBypassCache(url: string, config?: CacheableConfig) {
+  if (config?.skipCache) return true;
+  const path = url.split('?')[0];
+  if (path.includes('unread-count')) return true;
+  if (/\/messages\/(conversations|thread|inbox|sent)(\/|$)/.test(path)) {
+    return true;
+  }
+  return false;
+}
+
 export function clearApiCache() {
   getCache.clear();
   inflight.clear();
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new Event('school:api-cache-cleared'));
+  }
+}
+
+export function subscribeApiCacheCleared(handler: () => void) {
+  window.addEventListener('school:api-cache-cleared', handler);
+  return () => window.removeEventListener('school:api-cache-cleared', handler);
+}
+
+/** Drop cached GETs that match a URL prefix (e.g. `/posts`). */
+export function invalidateApiCache(urlPrefix?: string) {
+  if (!urlPrefix) {
+    clearApiCache();
+    return;
+  }
+  for (const key of getCache.keys()) {
+    if (key.startsWith(`${urlPrefix}::`) || key.startsWith(urlPrefix)) {
+      getCache.delete(key);
+    }
+  }
+  for (const key of inflight.keys()) {
+    if (key.startsWith(`${urlPrefix}::`) || key.startsWith(urlPrefix)) {
+      inflight.delete(key);
+    }
+  }
 }
 
 api.interceptors.request.use((config) => {
@@ -28,7 +75,7 @@ api.interceptors.request.use((config) => {
 
 api.interceptors.response.use(
   (res) => {
-    // Mutations invalidate short-lived GET cache so lists stay fresh.
+    // Any create/update/delete clears list cache so the next visit refetches.
     const method = (res.config.method || 'get').toLowerCase();
     if (method !== 'get' && method !== 'head') {
       clearApiCache();
@@ -41,7 +88,6 @@ api.interceptors.response.use(
       localStorage.removeItem('token');
       localStorage.removeItem('user');
       clearApiCache();
-      // Only bounce after an expired/invalid session — not on a failed login attempt.
       if (hadToken) {
         if (window.location.pathname !== '/') {
           window.location.href = '/';
@@ -56,17 +102,14 @@ api.interceptors.response.use(
 
 const originalGet = api.get.bind(api);
 
-api.get = ((url: string, config?: Parameters<typeof originalGet>[1]) => {
-  const skipCache = Boolean(
-    (config as { skipCache?: boolean } | undefined)?.skipCache,
-  );
-  if (skipCache) {
+api.get = ((url: string, config?: CacheableConfig) => {
+  if (shouldBypassCache(url, config)) {
     return originalGet(url, config);
   }
 
   const key = cacheKey(url, config?.params);
   const hit = getCache.get(key);
-  if (hit && hit.expiry > Date.now()) {
+  if (hit) {
     return Promise.resolve({
       data: hit.data,
       status: hit.status,
@@ -84,7 +127,6 @@ api.get = ((url: string, config?: Parameters<typeof originalGet>[1]) => {
   const request = originalGet(url, config)
     .then((res) => {
       getCache.set(key, {
-        expiry: Date.now() + GET_CACHE_TTL_MS,
         data: res.data,
         status: res.status,
         statusText: res.statusText,

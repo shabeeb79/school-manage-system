@@ -27,6 +27,7 @@ import {
 } from './lib/leave';
 import { MAX_ASSIGNMENT_MEDIA_BYTES, mediaUrl } from './lib/media';
 import { startPortalNotifications } from './lib/notifications';
+import { useKeepAlivePages } from './lib/keepAlive';
 import { teachingSubjectLabel } from './lib/subjects';
 import {
   emitUnreadChanged,
@@ -1474,6 +1475,7 @@ export default function StudentPortal() {
     assignments: 0,
     messages: 0,
   });
+  const { visited, epoch } = useKeepAlivePages(page, 'dashboard');
 
   const firstName = user?.firstName ?? STUDENT.firstName;
   const displayName = user ? `${user.firstName} ${user.lastName}` : STUDENT.name;
@@ -1591,20 +1593,30 @@ export default function StudentPortal() {
       </header>
 
       <main className="mx-auto max-w-6xl px-4 py-6 md:px-6 md:py-8">
-        {page === 'dashboard' ? (
-          <DashboardPage
-            firstName={firstName}
-            className={classLabel}
-            onOpenAssignments={() => setPage('assignments')}
-          />
-        ) : (
-          <StudentPage
-            page={page}
-            onMessageUnreadChange={(count) =>
-              setUnread((prev) => ({ ...prev, messages: count }))
-            }
-          />
-        )}
+        {Array.from(visited).map((id) => {
+          const active = page === id;
+          if (id === 'dashboard') {
+            return (
+              <div key={`dashboard-${epoch}`} className={active ? undefined : 'hidden'} hidden={!active}>
+                <DashboardPage
+                  firstName={firstName}
+                  className={classLabel}
+                  onOpenAssignments={() => setPage('assignments')}
+                />
+              </div>
+            );
+          }
+          return (
+            <div key={`${id}-${epoch}`} className={active ? undefined : 'hidden'} hidden={!active}>
+              <StudentPage
+                page={id as Exclude<PageId, 'dashboard'>}
+                onMessageUnreadChange={(count) =>
+                  setUnread((prev) => ({ ...prev, messages: count }))
+                }
+              />
+            </div>
+          );
+        })}
       </main>
     </div>
   );

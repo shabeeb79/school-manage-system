@@ -41,6 +41,7 @@ import {
 } from './lib/subjects';
 import { MAX_MEDIA_BYTES, mediaUrl } from './lib/media';
 import { startPortalNotifications } from './lib/notifications';
+import { useKeepAlivePages } from './lib/keepAlive';
 import {
   formatUnreadBadge,
   type UnreadCounts,
@@ -2534,6 +2535,7 @@ export default function AdminPortal() {
     assignments: 0,
     messages: 0,
   });
+  const { visited, epoch } = useKeepAlivePages(page, 'dashboard');
 
   const displayName = user ? `${user.firstName} ${user.lastName}` : 'Divya Menon';
   const displayRole = user?.role === 'ADMIN' ? 'Administrator' : user?.role ?? 'Administrator';
@@ -2597,7 +2599,7 @@ export default function AdminPortal() {
                 <Icon className="h-[18px] w-[18px] shrink-0" />
                 <span className="min-w-0 flex-1 text-left">{item.label}</span>
                 {unreadLabel && (
-                  <span className="inline-flex min-w-[1.15rem] items-center justify-center rounded-full bg-rose-500 px-1.5 py-0.5 text-[10px] font-semibold leading-none text-white">
+                  <span className="inline-flex min-w-[1.15rem] items-center justify-center rounded-full bg-rose-500 px-1 py-0.5 text-[10px] font-semibold leading-none text-white">
                     {unreadLabel}
                   </span>
                 )}
@@ -2650,18 +2652,26 @@ export default function AdminPortal() {
         </header>
 
         <main className="flex-1 overflow-y-auto px-4 py-5 md:px-8 md:py-7">
-          {page === 'messages' ? (
-            <MessagesPage
-              onUnreadChange={(count) =>
-                setUnread((prev) => ({ ...prev, messages: count }))
-              }
-            />
-          ) : (
-            (() => {
-              const Page = PAGES[page];
-              return <Page />;
-            })()
-          )}
+          {Array.from(visited).map((id) => {
+            const active = page === id;
+            if (id === 'messages') {
+              return (
+                <div key={`messages-${epoch}`} className={active ? undefined : 'hidden'} hidden={!active}>
+                  <MessagesPage
+                    onUnreadChange={(count) =>
+                      setUnread((prev) => ({ ...prev, messages: count }))
+                    }
+                  />
+                </div>
+              );
+            }
+            const Page = PAGES[id];
+            return (
+              <div key={`${id}-${epoch}`} className={active ? undefined : 'hidden'} hidden={!active}>
+                <Page />
+              </div>
+            );
+          })}
         </main>
       </div>
     </div>

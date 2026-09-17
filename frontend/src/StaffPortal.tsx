@@ -36,6 +36,7 @@ import {
 } from './lib/leave';
 import { mediaUrl } from './lib/media';
 import { startPortalNotifications } from './lib/notifications';
+import { useKeepAlivePages } from './lib/keepAlive';
 import { teachingSubjectLabel } from './lib/subjects';
 import {
   isStaffClassTeacher,
@@ -3057,6 +3058,7 @@ export default function StaffPortal() {
     assignments: 0,
     messages: 0,
   });
+  const { visited, epoch } = useKeepAlivePages(page, 'dashboard');
 
   const displayName = user ? `${user.firstName} ${user.lastName}` : TEACHER.name;
   const displayRole =
@@ -3184,20 +3186,30 @@ export default function StaffPortal() {
         </header>
 
         <main className="flex-1 overflow-y-auto px-4 py-5 md:px-8 md:py-7">
-          {page === 'dashboard' ? (
-            <DashboardPage
-              teacherName={displayName}
-              onViewAssignments={() => goTo('assignments')}
-              onViewTimetable={() => goTo('timetable')}
-            />
-          ) : (
-            <StaffPage
-              page={page}
-              onMessageUnreadChange={(count) =>
-                setUnread((prev) => ({ ...prev, messages: count }))
-              }
-            />
-          )}
+          {Array.from(visited).map((id) => {
+            const active = page === id;
+            if (id === 'dashboard') {
+              return (
+                <div key={`dashboard-${epoch}`} className={active ? undefined : 'hidden'} hidden={!active}>
+                  <DashboardPage
+                    teacherName={displayName}
+                    onViewAssignments={() => goTo('assignments')}
+                    onViewTimetable={() => goTo('timetable')}
+                  />
+                </div>
+              );
+            }
+            return (
+              <div key={`${id}-${epoch}`} className={active ? undefined : 'hidden'} hidden={!active}>
+                <StaffPage
+                  page={id as Exclude<PageId, 'dashboard'>}
+                  onMessageUnreadChange={(count) =>
+                    setUnread((prev) => ({ ...prev, messages: count }))
+                  }
+                />
+              </div>
+            );
+          })}
         </main>
       </div>
     </div>
