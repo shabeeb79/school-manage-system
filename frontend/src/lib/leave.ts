@@ -76,9 +76,28 @@ export function leaveStatusLabel(status: ApiLeaveStatus) {
 }
 
 export function apiErrorMessage(err: unknown, fallback: string) {
-  const message = (err as { response?: { data?: { message?: string | string[] } } })
-    ?.response?.data?.message;
+  const ax = err as {
+    message?: string;
+    code?: string;
+    response?: { status?: number; data?: { message?: string | string[] } };
+  };
+
+  const message = ax?.response?.data?.message;
   if (Array.isArray(message)) return message.join(', ');
-  if (typeof message === 'string') return message;
+  if (typeof message === 'string' && message.trim()) return message;
+
+  const status = ax?.response?.status;
+  if (status === 401) return 'Session expired. Please sign in again.';
+  if (status === 403) return 'You do not have permission for this action.';
+  if (status === 404) return 'Not found.';
+  if (status && status >= 500) return 'Server error. Please try again.';
+
+  // Browser network / CORS failures usually have no response.
+  if (!ax?.response) {
+    if (ax?.code === 'ERR_NETWORK' || ax?.message === 'Network Error') {
+      return 'Cannot reach API (network or CORS). Check backend is running and CORS allows this site.';
+    }
+  }
+
   return fallback;
 }

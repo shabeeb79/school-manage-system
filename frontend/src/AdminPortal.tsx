@@ -232,12 +232,12 @@ function DashboardPage() {
         const today = todayInputValue();
         const [todayRes, studentsRes, staffRes, leaveRes, classesRes, postsRes] =
           await Promise.all([
-            api.get('/attendance', { skipCache: true, params: { date: today } }),
-            api.get('/users', { skipCache: true, params: { role: 'STUDENT' } }),
-            api.get('/users', { skipCache: true, params: { role: 'STAFF' } }),
-            api.get('/leave', { skipCache: true }),
-            api.get('/classes', { skipCache: true }),
-            api.get('/posts', { skipCache: true }),
+            api.get('/attendance', { params: { date: today } }),
+            api.get('/users', { params: { role: 'STUDENT' } }),
+            api.get('/users', { params: { role: 'STAFF' } }),
+            api.get('/leave'),
+            api.get('/classes'),
+            api.get('/posts'),
           ]);
         if (!active) return;
 
@@ -294,7 +294,7 @@ function DashboardPage() {
           d.setDate(d.getDate() - i);
           const key = d.toISOString().slice(0, 10);
           const label = d.toLocaleDateString(undefined, { weekday: 'short' });
-          const { data } = await api.get('/attendance', { skipCache: true, params: { date: key } });
+          const { data } = await api.get('/attendance', { params: { date: key } });
           if (!active) return;
           const dayRecords = data as Array<{ status: string }>;
           const dayPresent = dayRecords.filter((r) => r.status === 'PRESENT').length;
@@ -615,10 +615,10 @@ function PostsPage() {
   const load = async () => {
     setLoadError('');
     try {
-      const { data } = await api.get('/posts', { skipCache: true });
+      const { data } = await api.get('/posts');
       setPosts(data);
-    } catch {
-      setLoadError('Could not load posts. Check that you are signed in as admin.');
+    } catch (err) {
+      setLoadError(apiErrorMessage(err, 'Could not load posts.'));
     } finally {
       setLoading(false);
     }
@@ -1145,14 +1145,22 @@ function UsersPage() {
   const load = async () => {
     setLoadError('');
     try {
-      const [usersRes, classesRes] = await Promise.all([
-        api.get('/users', { skipCache: true }),
-        api.get('/classes', { skipCache: true }),
+      const [usersRes, classesRes] = await Promise.allSettled([
+        api.get('/users'),
+        api.get('/classes'),
       ]);
-      setUsers(usersRes.data);
-      setClasses(classesRes.data);
-    } catch {
-      setLoadError('Could not load users. Check that you are signed in as admin.');
+
+      if (usersRes.status === 'fulfilled') {
+        setUsers(usersRes.value.data);
+      } else {
+        throw usersRes.reason;
+      }
+
+      if (classesRes.status === 'fulfilled') {
+        setClasses(classesRes.value.data);
+      }
+    } catch (err) {
+      setLoadError(apiErrorMessage(err, 'Could not load users.'));
     } finally {
       setLoading(false);
     }
@@ -1648,7 +1656,7 @@ function ClassesPage() {
   const load = async () => {
     setLoadError('');
     try {
-      const { data } = await api.get('/classes', { skipCache: true });
+      const { data } = await api.get('/classes');
       setItems(data);
     } catch (err) {
       setLoadError(apiErrorMessage(err, 'Could not load classes.'));
@@ -1900,8 +1908,8 @@ function AttendancePage() {
       const params: Record<string, string> = { date };
       if (classId !== 'all') params.schoolClassId = classId;
       const [classesRes, attendanceRes] = await Promise.all([
-        api.get('/classes', { skipCache: true }),
-        api.get('/attendance', { skipCache: true, params }),
+        api.get('/classes'),
+        api.get('/attendance', { params }),
       ]);
       setClasses(classesRes.data);
       setRecords(attendanceRes.data);
@@ -2148,7 +2156,7 @@ function GradesPage() {
   const load = async () => {
     setLoadError('');
     try {
-      const { data } = await api.get('/grades/toppers', { skipCache: true });
+      const { data } = await api.get('/grades/toppers');
       setSchoolTopper(data.schoolTopper);
       setSchoolPending(Boolean(data.schoolPending ?? !data.schoolTopper));
       setClassToppers(data.classToppers ?? []);
@@ -2288,10 +2296,10 @@ function LeavePage() {
   const load = async () => {
     setError('');
     try {
-      const { data } = await api.get('/leave', { skipCache: true });
+      const { data } = await api.get('/leave');
       setItems(data);
-    } catch {
-      setError('Could not load leave requests.');
+    } catch (err) {
+      setError(apiErrorMessage(err, 'Could not load leave requests.'));
     } finally {
       setLoading(false);
     }
@@ -2552,9 +2560,7 @@ export default function AdminPortal() {
     assignments: 0,
     messages: 0,
   });
-  const { visited, epoch } = useKeepAlivePages(page, 'dashboard', {
-    keep: ['dashboard'],
-  });
+  const { visited, epoch } = useKeepAlivePages(page, 'dashboard');
 
   const displayName = user ? `${user.firstName} ${user.lastName}` : 'Divya Menon';
   const displayRole = user?.role === 'ADMIN' ? 'Administrator' : user?.role ?? 'Administrator';

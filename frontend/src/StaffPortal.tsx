@@ -234,11 +234,11 @@ function DashboardPage({
         const today = todayInputValue();
         const [rosterRes, classRes, attendanceRes, assignmentsRes, timetableRes] =
           await Promise.all([
-            api.get('/users/my-students', { skipCache: true }),
-            api.get('/users/my-class-students', { skipCache: true }),
-            api.get('/attendance', { skipCache: true, params: { date: today } }),
-            api.get('/assignments', { skipCache: true }),
-            api.get('/timetable/mine', { skipCache: true }).catch(() => ({ data: { periods: [] } })),
+            api.get('/users/my-students'),
+            api.get('/users/my-class-students'),
+            api.get('/attendance', { params: { date: today } }),
+            api.get('/assignments'),
+            api.get('/timetable/mine').catch(() => ({ data: { periods: [] } })),
           ]);
         if (!active) return;
 
@@ -802,7 +802,7 @@ function StudentsPage() {
   const load = async () => {
     setLoadError('');
     try {
-      const studentsRes = await api.get('/users/my-students', { skipCache: true });
+      const studentsRes = await api.get('/users/my-students');
       setStudents(studentsRes.data);
       setClasses(
         assignedClasses.map((c) => ({
@@ -811,8 +811,8 @@ function StudentsPage() {
           section: c.section ?? '',
         })),
       );
-    } catch {
-      setLoadError('Could not load students. Check that you are signed in as staff.');
+    } catch (err) {
+      setLoadError(apiErrorMessage(err, 'Could not load students.'));
     } finally {
       setLoading(false);
     }
@@ -1130,10 +1130,8 @@ function AttendancePage() {
         return;
       }
       const [studentsRes, attendanceRes] = await Promise.all([
-        api.get('/users/my-class-students', { skipCache: true }),
-        api.get('/attendance', {
-          skipCache: true,
-          params: { date, schoolClassId: assignedClassId },
+        api.get('/users/my-class-students'),
+        api.get('/attendance', { params: { date, schoolClassId: assignedClassId },
         }),
       ]);
       const list = (studentsRes.data as ApiStudent[]).filter((student) =>
@@ -1367,7 +1365,7 @@ function GradesPage() {
         classId || selectedClassId
           ? { schoolClassId: classId || selectedClassId }
           : undefined;
-      const { data: payload } = await api.get('/grades/my-class', { skipCache: true, params });
+      const { data: payload } = await api.get('/grades/my-class', { params });
       setData(payload);
 
       const apiClasses = (payload.assignedClasses ?? []) as Array<{ id: string }>;
@@ -1687,8 +1685,8 @@ function AssignmentsPage() {
     setError('');
     try {
       const [assignmentsRes, studentsRes] = await Promise.all([
-        api.get('/assignments', { skipCache: true }),
-        api.get('/users/my-students', { skipCache: true }),
+        api.get('/assignments'),
+        api.get('/users/my-students'),
       ]);
       setAssignments(assignmentsRes.data);
       setAllStudents(studentsRes.data);
@@ -2309,7 +2307,7 @@ function LeavePage() {
   const load = async () => {
     setError('');
     try {
-      const { data } = await api.get('/leave', { skipCache: true });
+      const { data } = await api.get('/leave');
       setItems(data);
     } catch {
       setError('Could not load leave requests.');
@@ -2658,7 +2656,7 @@ function TimetablePage() {
   const load = async () => {
     setError('');
     try {
-      const { data } = await api.get('/timetable/mine', { skipCache: true });
+      const { data } = await api.get('/timetable/mine');
       const rows = (data.periods ?? []) as TimetablePeriodRow[];
       setPeriods(rows);
       const snapshot = buildDraft(rows);
@@ -2979,7 +2977,7 @@ function AnnouncementsPage() {
     (async () => {
       setError('');
       try {
-        const { data } = await api.get('/posts/feed', { skipCache: true });
+        const { data } = await api.get('/posts/feed');
         if (!active) return;
         setPosts(data);
         setLoading(false);
@@ -3084,9 +3082,7 @@ export default function StaffPortal() {
     assignments: 0,
     messages: 0,
   });
-  const { visited, epoch } = useKeepAlivePages(page, 'dashboard', {
-    keep: ['dashboard'],
-  });
+  const { visited, epoch } = useKeepAlivePages(page, 'dashboard');
 
   const displayName = user ? `${user.firstName} ${user.lastName}` : TEACHER.name;
   const displayRole =

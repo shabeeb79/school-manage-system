@@ -22,6 +22,7 @@ export class UsersController {
   constructor(private users: UsersService) {}
 
   @Get()
+  @Roles(UserRole.ADMIN)
   findAll(@Query('role') role?: UserRole) {
     return this.users.findAll(role);
   }

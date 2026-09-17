@@ -79,11 +79,22 @@ api.interceptors.request.use((config) => {
   return config;
 });
 
+function mutationClearsCache(url = '', method = 'get') {
+  const m = method.toLowerCase();
+  if (m === 'get' || m === 'head') return false;
+  const path = url.split('?')[0];
+  // Read-receipt style updates should not wipe list caches / remount pages.
+  if (/\/feed\/read$/.test(path)) return false;
+  if (/\/read-all$/.test(path)) return false;
+  if (/\/[^/]+\/read$/.test(path)) return false;
+  return true;
+}
+
 api.interceptors.response.use(
   (res) => {
-    // Any create/update/delete clears list cache so the next visit refetches.
     const method = (res.config.method || 'get').toLowerCase();
-    if (method !== 'get' && method !== 'head') {
+    const url = `${res.config.baseURL || ''}${res.config.url || ''}`;
+    if (mutationClearsCache(url, method)) {
       clearApiCache();
     }
     return res;

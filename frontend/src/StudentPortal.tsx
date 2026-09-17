@@ -310,7 +310,7 @@ function DashboardPage({
     let active = true;
     (async () => {
       try {
-        const { data } = await api.get('/attendance', { skipCache: true });
+        const { data } = await api.get('/attendance');
         if (!active) return;
         const records = data as Array<{ status: string }>;
         const total = records.length;
@@ -340,7 +340,7 @@ function DashboardPage({
     (async () => {
       setAssignmentsLoading(true);
       try {
-        const { data } = await api.get('/assignments', { skipCache: true });
+        const { data } = await api.get('/assignments');
         if (!active) return;
         const list = (data as Array<{
           id: string;
@@ -504,7 +504,7 @@ function AnnouncementsPage() {
       setError('');
       try {
         // Always fetch fresh so new admin posts show; do not wait on mark-read.
-        const { data } = await api.get('/posts/feed', { skipCache: true });
+        const { data } = await api.get('/posts/feed');
         if (!active) return;
         setPosts(data);
         setLoading(false);
@@ -605,7 +605,7 @@ function AttendancePage() {
     (async () => {
       setError('');
       try {
-        const { data } = await api.get('/attendance', { skipCache: true });
+        const { data } = await api.get('/attendance');
         if (active) setRecords(data);
       } catch (err) {
         if (active) setError(apiErrorMessage(err, 'Could not load attendance.'));
@@ -770,7 +770,7 @@ function GradesPage() {
     (async () => {
       setError('');
       try {
-        const { data } = await api.get('/grades/my-card', { skipCache: true });
+        const { data } = await api.get('/grades/my-card');
         if (active) setCard(data);
       } catch (err) {
         if (active) setError(apiErrorMessage(err, 'Could not load grade card.'));
@@ -964,7 +964,7 @@ function AssignmentsPage() {
   const load = async () => {
     setError('');
     try {
-      const { data } = await api.get('/assignments', { skipCache: true });
+      const { data } = await api.get('/assignments');
       setAssignments(data);
     } catch {
       setError('Could not load assignments.');
@@ -1261,7 +1261,7 @@ function LeavePage() {
   const load = async () => {
     setError('');
     try {
-      const { data } = await api.get('/leave', { skipCache: true });
+      const { data } = await api.get('/leave');
       setItems(data);
     } catch {
       setError('Could not load leave requests.');
@@ -1485,9 +1485,7 @@ export default function StudentPortal() {
     assignments: 0,
     messages: 0,
   });
-  const { visited, epoch } = useKeepAlivePages(page, 'dashboard', {
-    keep: ['dashboard'],
-  });
+  const { visited, epoch } = useKeepAlivePages(page, 'dashboard');
 
   const firstName = user?.firstName ?? STUDENT.firstName;
   const displayName = user ? `${user.firstName} ${user.lastName}` : STUDENT.name;

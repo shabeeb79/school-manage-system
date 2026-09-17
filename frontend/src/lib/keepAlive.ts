@@ -1,40 +1,24 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { subscribeApiCacheCleared } from '../api/client';
 
-type Options<T extends string> = {
-  /** Pages that stay mounted when you navigate away. Default: only the initial page. */
-  keep?: readonly T[];
-};
-
 /**
- * Keep-alive for portal pages.
- * By default only the dashboard stays mounted; every other page remounts fresh
- * (fast + always up to date after creates elsewhere).
+ * Keeps every visited page mounted so navigating away/back does not reload.
+ * After a create/update/delete (API cache clear), inactive pages remount the
+ * next time you open them. The active page should call load() itself.
  */
-export function useKeepAlivePages<T extends string>(
-  active: T,
-  initial: T,
-  options?: Options<T>,
-) {
-  const keepKey = (options?.keep ?? [initial]).join('|');
-  const keepSet = useMemo(
-    () => new Set((keepKey ? keepKey.split('|') : [initial]) as T[]),
-    [keepKey, initial],
-  );
-
+export function useKeepAlivePages<T extends string>(active: T, initial: T) {
   const [visited, setVisited] = useState(() => new Set<T>([initial]));
   const [epoch, setEpoch] = useState(0);
   const [dirty, setDirty] = useState(() => new Set<T>());
 
   useEffect(() => {
-    if (!keepSet.has(active)) return;
     setVisited((prev) => {
       if (prev.has(active)) return prev;
       const next = new Set(prev);
       next.add(active);
       return next;
     });
-  }, [active, keepSet]);
+  }, [active]);
 
   useEffect(
     () =>
@@ -42,12 +26,12 @@ export function useKeepAlivePages<T extends string>(
         setDirty((prev) => {
           const next = new Set(prev);
           for (const id of visited) {
-            if (id !== active && keepSet.has(id)) next.add(id);
+            if (id !== active) next.add(id);
           }
           return next;
         });
       }),
-    [active, visited, keepSet],
+    [active, visited],
   );
 
   useEffect(() => {
@@ -60,14 +44,5 @@ export function useKeepAlivePages<T extends string>(
     });
   }, [active, dirty]);
 
-  const pagesToRender = useMemo(() => {
-    const kept = Array.from(visited).filter((id) => keepSet.has(id));
-    if (!keepSet.has(active) && !kept.includes(active)) {
-      return [...kept, active];
-    }
-    // Drop non-keep pages when inactive so they remount next visit.
-    return kept.includes(active) ? kept : [...kept, active];
-  }, [visited, active, keepSet]);
-
-  return { visited: new Set(pagesToRender), epoch };
+  return { visited, epoch };
 }
