@@ -7,7 +7,7 @@ import { AppModule } from './app.module';
 async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
   app.enableCors({
-    origin: true,
+    origin: ['https://school-manage-system.contactzylust.workers.dev'],
     credentials: true,
   });
   app.useStaticAssets(join(process.cwd(), 'uploads'), {
