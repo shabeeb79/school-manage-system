@@ -62,7 +62,7 @@ export class GradesService {
         },
       },
       orderBy: { createdAt: 'desc' },
-      take: listTake(undefined, 200, 500),
+      take: listTake(undefined, 100, 200),
     });
   }
 
@@ -220,11 +220,27 @@ export class GradesService {
     });
 
     const studentIds = students.map((s) => s.userId);
+    const subjectFilter = expectedSubjects.length
+      ? expectedSubjects
+      : staff.subject
+        ? [staff.subject]
+        : [];
     const grades = studentIds.length
       ? await this.prisma.grade.findMany({
           where: {
             studentId: { in: studentIds },
             examName: TERM_ASSESSMENT,
+            ...(subjectFilter.length
+              ? { subject: { in: subjectFilter } }
+              : {}),
+          },
+          select: {
+            id: true,
+            studentId: true,
+            subject: true,
+            score: true,
+            maxScore: true,
+            gradeLetter: true,
           },
         })
       : [];
@@ -393,40 +409,56 @@ export class GradesService {
   }
 
   async toppers() {
-    const classes = await this.prisma.schoolClass.findMany({
-      orderBy: [{ name: 'asc' }, { section: 'asc' }],
-      include: {
-        students: {
-          include: {
-            user: {
-              select: { id: true, firstName: true, lastName: true },
+    const expectedSubjects = this.expectedSubjects();
+
+    const [classes, grades] = await Promise.all([
+      this.prisma.schoolClass.findMany({
+        orderBy: [{ name: 'asc' }, { section: 'asc' }],
+        select: {
+          id: true,
+          name: true,
+          section: true,
+          students: {
+            select: {
+              userId: true,
+              studentId: true,
+              user: {
+                select: { id: true, firstName: true, lastName: true },
+              },
             },
           },
         },
-        staff: {
-          where: { subject: { not: null } },
-          select: { subject: true },
+      }),
+      this.prisma.grade.findMany({
+        where: {
+          examName: TERM_ASSESSMENT,
+          ...(expectedSubjects.length
+            ? { subject: { in: expectedSubjects } }
+            : {}),
         },
-      },
-    });
+        select: {
+          studentId: true,
+          subject: true,
+          score: true,
+          maxScore: true,
+        },
+      }),
+    ]);
 
-    const allStudentIds = classes.flatMap((c) =>
-      c.students.map((s) => s.userId),
-    );
-    const grades = allStudentIds.length
-      ? await this.prisma.grade.findMany({
-          where: {
-            studentId: { in: allStudentIds },
-            examName: TERM_ASSESSMENT,
-          },
-        })
-      : [];
-
-    const gradesByStudent = new Map<string, typeof grades>();
+    const gradesByStudent = new Map<
+      string,
+      Map<string, { score: number; maxScore: number }>
+    >();
     for (const grade of grades) {
-      const list = gradesByStudent.get(grade.studentId) ?? [];
-      list.push(grade);
-      gradesByStudent.set(grade.studentId, list);
+      let bySubject = gradesByStudent.get(grade.studentId);
+      if (!bySubject) {
+        bySubject = new Map();
+        gradesByStudent.set(grade.studentId, bySubject);
+      }
+      bySubject.set(grade.subject, {
+        score: Number(grade.score),
+        maxScore: Number(grade.maxScore),
+      });
     }
 
     type RankedStudent = {
@@ -449,20 +481,15 @@ export class GradesService {
     const schoolCandidates: RankedStudent[] = [];
 
     for (const schoolClass of classes) {
-      const expectedSubjects = this.expectedSubjects();
       const classLabel = formatClassLabel(
         schoolClass.name,
         schoolClass.section,
       );
       const studentsTotal = schoolClass.students.length;
-
       const completeStudents: RankedStudent[] = [];
 
       for (const profile of schoolClass.students) {
-        const studentGrades = gradesByStudent.get(profile.userId) ?? [];
-        const bySubject = new Map(
-          studentGrades.map((g) => [g.subject, g] as const),
-        );
+        const bySubject = gradesByStudent.get(profile.userId) ?? new Map();
         const subjectsMarked = expectedSubjects.filter((subject) =>
           bySubject.has(subject),
         ).length;
@@ -471,14 +498,14 @@ export class GradesService {
           subjectsMarked === expectedSubjects.length;
         if (!studentComplete) continue;
 
-        const totalScore = expectedSubjects.reduce((sum, subject) => {
-          const grade = bySubject.get(subject)!;
-          return sum + Number(grade.score);
-        }, 0);
-        const totalMax = expectedSubjects.reduce((sum, subject) => {
-          const grade = bySubject.get(subject)!;
-          return sum + Number(grade.maxScore);
-        }, 0);
+        const totalScore = expectedSubjects.reduce(
+          (sum, subject) => sum + (bySubject.get(subject)?.score ?? 0),
+          0,
+        );
+        const totalMax = expectedSubjects.reduce(
+          (sum, subject) => sum + (bySubject.get(subject)?.maxScore ?? 0),
+          0,
+        );
         const percentage =
           totalMax > 0
             ? Number(((totalScore / totalMax) * 100).toFixed(2))

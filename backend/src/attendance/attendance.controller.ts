@@ -14,13 +14,29 @@ export class AttendanceController {
 
   @Post()
   @Roles(UserRole.ADMIN, UserRole.STAFF)
-  mark(@CurrentUser() user: { id: string }, @Body() dto: MarkAttendanceDto) {
-    return this.attendance.mark(user.id, dto);
+  mark(
+    @CurrentUser()
+    user: {
+      id: string;
+      staffProfile?: { assignedClassId?: string | null } | null;
+    },
+    @Body() dto: MarkAttendanceDto,
+  ) {
+    return this.attendance.mark(
+      user.id,
+      dto,
+      user.staffProfile?.assignedClassId,
+    );
   }
 
   @Get()
   list(
-    @CurrentUser() user: { id: string; role: UserRole },
+    @CurrentUser()
+    user: {
+      id: string;
+      role: UserRole;
+      staffProfile?: { assignedClassId?: string | null } | null;
+    },
     @Query('date') date?: string,
     @Query('studentId') studentId?: string,
     @Query('schoolClassId') schoolClassId?: string,
@@ -31,6 +47,7 @@ export class AttendanceController {
       date,
       studentId,
       schoolClassId,
+      staffHomeroomId: user.staffProfile?.assignedClassId,
     });
   }
 }

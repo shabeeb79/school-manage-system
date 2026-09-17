@@ -7,6 +7,7 @@ import {
 import { TeachingSubject, UserRole } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
 import { PrismaService } from '../prisma/prisma.service';
+import { AuthUserCache } from '../auth/auth-user.cache';
 import { listTake } from '../common/pagination';
 import {
   assertSubjectAvailableForClasses,
@@ -31,7 +32,10 @@ type StudentWriteInput = {
 
 @Injectable()
 export class UsersService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private userCache: AuthUserCache,
+  ) {}
 
   findAll(role?: UserRole) {
     return this.prisma.user.findMany({
@@ -44,11 +48,39 @@ export class UsersService {
         role: true,
         isActive: true,
         createdAt: true,
-        studentProfile: { include: { schoolClass: true } },
-        staffProfile: { include: staffProfileInclude },
+        studentProfile: {
+          select: {
+            studentId: true,
+            schoolClassId: true,
+            parentPhone: true,
+            enrollmentDate: true,
+            schoolClass: {
+              select: { id: true, name: true, section: true },
+            },
+          },
+        },
+        staffProfile: {
+          select: {
+            employeeId: true,
+            subject: true,
+            phone: true,
+            assignedClassId: true,
+            assignedClass: {
+              select: { id: true, name: true, section: true },
+            },
+            classAssignments: {
+              select: {
+                schoolClassId: true,
+                schoolClass: {
+                  select: { id: true, name: true, section: true },
+                },
+              },
+            },
+          },
+        },
       },
       orderBy: { lastName: 'asc' },
-      take: listTake(undefined, 200, 500),
+      take: listTake(undefined, 100, 200),
     });
   }
 
@@ -257,6 +289,7 @@ export class UsersService {
           ...(lastName !== undefined ? { lastName: lastName.trim() } : {}),
         },
       });
+      this.userCache.invalidate(studentUserId);
     }
 
     if (studentId !== undefined) {
@@ -289,6 +322,9 @@ export class UsersService {
           : {}),
       },
       include: { user: true, schoolClass: true },
+    }).then((result) => {
+      this.userCache.invalidate(studentUserId);
+      return result;
     });
   }
 
@@ -473,6 +509,8 @@ export class UsersService {
       });
     }
 
+    this.userCache.invalidate(staffUserId);
+
     return this.prisma.staffProfile.findUnique({
       where: { userId: staffUserId },
       include: {
@@ -514,7 +552,7 @@ export class UsersService {
       }
     }
 
-    return this.prisma.user.update({
+    const updated = await this.prisma.user.update({
       where: { id: adminUserId },
       data: {
         ...(data.firstName !== undefined
@@ -537,11 +575,13 @@ export class UsersService {
         createdAt: true,
       },
     });
+    this.userCache.invalidate(adminUserId);
+    return updated;
   }
 
   async setActive(id: string, isActive: boolean) {
     await this.findOne(id);
-    return this.prisma.user.update({
+    const updated = await this.prisma.user.update({
       where: { id },
       data: { isActive },
       select: {
@@ -553,6 +593,8 @@ export class UsersService {
         isActive: true,
       },
     });
+    this.userCache.invalidate(id);
+    return updated;
   }
 
   async remove(id: string, actorId: string) {
@@ -561,6 +603,7 @@ export class UsersService {
     }
     await this.findOne(id);
     await this.prisma.user.delete({ where: { id } });
+    this.userCache.invalidate(id);
     return { ok: true };
   }
 }

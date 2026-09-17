@@ -88,7 +88,7 @@ export async function fetchThread(peerId: string) {
 }
 
 export async function markThreadRead(peerId: string) {
-  const { data } = await api.patch<{ peer: MessagePeer; messages: ApiMessage[] }>(
+  const { data } = await api.patch<{ marked: number; peerId: string }>(
     `/messages/with/${peerId}/read`,
   );
   return data;

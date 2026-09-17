@@ -13,8 +13,11 @@ function prismaDatabaseUrl(raw = process.env.DATABASE_URL) {
     if (!url.searchParams.has('pgbouncer')) {
       url.searchParams.set('pgbouncer', 'true');
     }
+    // Allow a small pool so JWT + handler queries are not fully serialized.
+    // Keep modest under Supabase transaction pooler.
     if (!url.searchParams.has('connection_limit')) {
-      url.searchParams.set('connection_limit', '1');
+      const limit = process.env.PRISMA_CONNECTION_LIMIT || '5';
+      url.searchParams.set('connection_limit', limit);
     }
     return url.toString();
   } catch {

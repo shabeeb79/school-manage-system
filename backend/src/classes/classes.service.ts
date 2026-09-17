@@ -10,9 +10,15 @@ export class ClassesService {
     return this.prisma.schoolClass.create({ data: dto });
   }
 
+  /** Lean list for dashboards — counts + class-teacher names only. */
   findAll() {
     return this.prisma.schoolClass.findMany({
-      include: {
+      select: {
+        id: true,
+        name: true,
+        section: true,
+        academicYear: true,
+        createdAt: true,
         _count: {
           select: {
             students: true,
@@ -20,16 +26,9 @@ export class ClassesService {
             classAssignments: true,
           },
         },
-        staff: {
-          select: {
-            id: true,
-            user: { select: { firstName: true, lastName: true } },
-          },
-        },
         classAssignments: {
           select: {
             id: true,
-            schoolClassId: true,
             staffProfile: {
               select: {
                 id: true,
@@ -94,12 +93,20 @@ export class ClassesService {
   }
 
   async update(id: string, dto: Partial<CreateClassDto>) {
-    await this.findOne(id);
+    const exists = await this.prisma.schoolClass.findUnique({
+      where: { id },
+      select: { id: true },
+    });
+    if (!exists) throw new NotFoundException('Class not found');
     return this.prisma.schoolClass.update({ where: { id }, data: dto });
   }
 
   async remove(id: string) {
-    await this.findOne(id);
+    const exists = await this.prisma.schoolClass.findUnique({
+      where: { id },
+      select: { id: true },
+    });
+    if (!exists) throw new NotFoundException('Class not found');
     return this.prisma.schoolClass.delete({ where: { id } });
   }
 }

@@ -22,8 +22,14 @@ function parseDateOnly(value: string) {
 export class AttendanceService {
   constructor(private prisma: PrismaService) {}
 
-  async mark(markedById: string, dto: MarkAttendanceDto) {
-    const homeroomId = await resolveClassTeacherClassId(this.prisma, markedById);
+  async mark(
+    markedById: string,
+    dto: MarkAttendanceDto,
+    staffHomeroomId?: string | null,
+  ) {
+    const homeroomId =
+      staffHomeroomId ??
+      (await resolveClassTeacherClassId(this.prisma, markedById));
     if (!homeroomId) {
       throw new ForbiddenException(
         'Only class teachers can mark attendance',
@@ -42,40 +48,48 @@ export class AttendanceService {
       select: { userId: true },
     });
     const allowed = new Set(classStudents.map((s) => s.userId));
-
     const date = parseDateOnly(dto.date);
-    const results = [];
-    for (const entry of dto.entries) {
-      if (!allowed.has(entry.studentId)) {
-        continue;
-      }
-      const record = await this.prisma.attendance.upsert({
-        where: {
-          studentId_date: { studentId: entry.studentId, date },
-        },
-        create: {
-          studentId: entry.studentId,
-          date,
-          status: entry.status,
-          remarks: entry.remarks,
-          schoolClassId,
-          markedById,
-        },
-        update: {
-          status: entry.status,
-          remarks: entry.remarks,
-          schoolClassId,
-          markedById,
-        },
-        include: {
-          student: {
-            select: { id: true, firstName: true, lastName: true },
+    const entries = dto.entries.filter((entry) => allowed.has(entry.studentId));
+    if (!entries.length) return [];
+
+    // Parallel upserts in one transaction (N queries, one round-trip batch).
+    const results = await this.prisma.$transaction(
+      entries.map((entry) =>
+        this.prisma.attendance.upsert({
+          where: {
+            studentId_date: { studentId: entry.studentId, date },
           },
-          schoolClass: true,
-        },
-      });
-      results.push(record);
-    }
+          create: {
+            studentId: entry.studentId,
+            date,
+            status: entry.status,
+            remarks: entry.remarks,
+            schoolClassId,
+            markedById,
+          },
+          update: {
+            status: entry.status,
+            remarks: entry.remarks,
+            schoolClassId,
+            markedById,
+          },
+          select: {
+            id: true,
+            studentId: true,
+            date: true,
+            status: true,
+            remarks: true,
+            schoolClassId: true,
+            student: {
+              select: { id: true, firstName: true, lastName: true },
+            },
+            schoolClass: {
+              select: { id: true, name: true, section: true },
+            },
+          },
+        }),
+      ),
+    );
     return results;
   }
 
@@ -85,6 +99,7 @@ export class AttendanceService {
     date?: string;
     studentId?: string;
     schoolClassId?: string;
+    staffHomeroomId?: string | null;
   }) {
     const where: Record<string, unknown> = {};
     if (params.date) where.date = parseDateOnly(params.date);
@@ -95,10 +110,10 @@ export class AttendanceService {
     } else if (params.studentId) {
       where.studentId = params.studentId;
     } else if (params.role === UserRole.STAFF) {
-      const homeroomId = await resolveClassTeacherClassId(
-        this.prisma,
-        params.userId,
-      );
+      const homeroomId =
+        params.staffHomeroomId !== undefined
+          ? params.staffHomeroomId
+          : await resolveClassTeacherClassId(this.prisma, params.userId);
       if (!homeroomId) {
         where.schoolClassId = '__none__';
       } else if (params.schoolClassId && params.schoolClassId !== homeroomId) {

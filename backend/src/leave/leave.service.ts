@@ -25,11 +25,6 @@ const requesterSelect = {
     select: {
       employeeId: true,
       assignedClass: { select: { id: true, name: true, section: true } },
-      classAssignments: {
-        select: {
-          schoolClass: { select: { id: true, name: true, section: true } },
-        },
-      },
     },
   },
 } as const;

@@ -5,7 +5,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { SubmissionStatus, UserRole } from '@prisma/client';
-import { existsSync, unlinkSync } from 'fs';
+import { unlink } from 'fs/promises';
 import { join } from 'path';
 import { listTake } from '../common/pagination';
 import { PrismaService } from '../prisma/prisma.service';
@@ -264,35 +264,41 @@ export class AssignmentsService {
     if (user.role !== UserRole.STUDENT) {
       return { marked: 0 };
     }
-    const list = await this.list(user);
-    const unreadIds = list
-      .filter(
-        (item) => 'isUnread' in item && Boolean((item as { isUnread?: boolean }).isUnread),
-      )
-      .map((item) => item.id);
-    if (!unreadIds.length) return { marked: 0 };
+    if (!user.studentProfile?.schoolClassId) {
+      return { marked: 0 };
+    }
+
+    const unread = await this.prisma.assignment.findMany({
+      where: {
+        schoolClassId: user.studentProfile.schoolClassId,
+        createdBy: { role: { in: [UserRole.STAFF, UserRole.ADMIN] } },
+        createdById: { not: user.id },
+        reads: { none: { userId: user.id } },
+      },
+      select: { id: true },
+      take: 200,
+    });
+    if (!unread.length) return { marked: 0 };
 
     await this.prisma.assignmentRead.createMany({
-      data: unreadIds.map((assignmentId) => ({
-        assignmentId,
+      data: unread.map((assignment) => ({
+        assignmentId: assignment.id,
         userId: user.id,
       })),
       skipDuplicates: true,
     });
 
-    return { marked: unreadIds.length };
+    return { marked: unread.length };
   }
 
-  private deleteMediaFile(fileUrl?: string | null) {
+  private async deleteMediaFile(fileUrl?: string | null) {
     if (!fileUrl) return;
     const relative = fileUrl.replace(/^\/uploads\//, '');
     const fullPath = join(process.cwd(), 'uploads', relative);
-    if (existsSync(fullPath)) {
-      try {
-        unlinkSync(fullPath);
-      } catch {
-        // ignore missing/locked files
-      }
+    try {
+      await unlink(fullPath);
+    } catch {
+      // ignore missing/locked files
     }
   }
 
@@ -333,7 +339,7 @@ export class AssignmentsService {
     }
 
     if (existing?.fileUrl) {
-      this.deleteMediaFile(existing.fileUrl);
+      await this.deleteMediaFile(existing.fileUrl);
     }
 
     const nextAttempt = (existing?.attemptCount ?? 0) + 1;
@@ -392,14 +398,14 @@ export class AssignmentsService {
     });
 
     if (existing && existing.attemptCount >= MAX_ATTEMPTS) {
-      this.deleteMediaFile(`/uploads/assignments/${file.filename}`);
+      await this.deleteMediaFile(`/uploads/assignments/${file.filename}`);
       throw new BadRequestException(
         'Submission blocked: you have reached the maximum of 3 attempts for this assignment',
       );
     }
 
     if (existing?.status === SubmissionStatus.APPROVED) {
-      this.deleteMediaFile(`/uploads/assignments/${file.filename}`);
+      await this.deleteMediaFile(`/uploads/assignments/${file.filename}`);
       throw new BadRequestException('This assignment is already approved');
     }
 
@@ -452,7 +458,7 @@ export class AssignmentsService {
     const submission = await this.assertCanReview(submissionId, grader);
 
     if (dto.status === SubmissionStatus.REJECTED) {
-      this.deleteMediaFile(submission.fileUrl);
+      await this.deleteMediaFile(submission.fileUrl);
       return this.prisma.assignmentSubmission.update({
         where: { id: submissionId },
         data: {

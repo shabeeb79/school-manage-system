@@ -5,7 +5,8 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { MessageKind, Prisma, UserRole } from '@prisma/client';
-import { unlinkSync, existsSync } from 'fs';
+import { unlink, access } from 'fs/promises';
+import { constants } from 'fs';
 import { join } from 'path';
 import { listTake } from '../common/pagination';
 import { PrismaService } from '../prisma/prisma.service';
@@ -260,13 +261,9 @@ export class MessagesService {
   private deleteUploaded(file?: Express.Multer.File) {
     if (!file?.filename) return;
     const fullPath = join(process.cwd(), 'uploads', 'messages', file.filename);
-    if (existsSync(fullPath)) {
-      try {
-        unlinkSync(fullPath);
-      } catch {
-        /* ignore cleanup errors */
-      }
-    }
+    void access(fullPath, constants.F_OK)
+      .then(() => unlink(fullPath))
+      .catch(() => undefined);
   }
 
   inbox(userId: string) {
@@ -297,62 +294,119 @@ export class MessagesService {
       where,
       select: userSelect,
       orderBy: [{ firstName: 'asc' }, { lastName: 'asc' }],
+      take: listTake(undefined, 200, 500),
     });
   }
 
   async conversations(userId: string) {
-    const allowed = await this.contacts(userId);
-    const allowedIds = new Set(allowed.map((u) => u.id));
+    type LastRow = {
+      id: string;
+      peer_id: string;
+      senderId: string;
+      receiverId: string;
+      subject: string;
+      body: string;
+      kind: MessageKind;
+      mediaUrl: string | null;
+      mediaMime: string | null;
+      isRead: boolean;
+      readAt: Date | null;
+      createdAt: Date;
+    };
 
-    const [messages, unreadGroups] = await Promise.all([
-      this.prisma.message.findMany({
-        where: {
-          OR: [{ senderId: userId }, { receiverId: userId }],
-        },
-        include: this.includePeers(),
-        orderBy: { createdAt: 'desc' },
-        take: listTake(undefined, 500, 1000),
+    const lastRows = await this.prisma.$queryRaw<LastRow[]>`
+      SELECT DISTINCT ON (peer_id)
+        m.id,
+        CASE
+          WHEN m."senderId" = ${userId} THEN m."receiverId"
+          ELSE m."senderId"
+        END AS peer_id,
+        m."senderId",
+        m."receiverId",
+        m.subject,
+        m.body,
+        m.kind,
+        m."mediaUrl",
+        m."mediaMime",
+        m."isRead",
+        m."readAt",
+        m."createdAt"
+      FROM messages m
+      WHERE m."senderId" = ${userId} OR m."receiverId" = ${userId}
+      ORDER BY peer_id, m."createdAt" DESC
+    `;
+
+    if (!lastRows.length) return [];
+
+    const peerIds = lastRows.map((r) => r.peer_id);
+    const me = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { role: true },
+    });
+
+    const [peers, unreadGroups, allowed] = await Promise.all([
+      this.prisma.user.findMany({
+        where: { id: { in: peerIds }, isActive: true },
+        select: userSelect,
       }),
       this.prisma.message.groupBy({
         by: ['senderId'],
-        where: { receiverId: userId, isRead: false },
+        where: { receiverId: userId, isRead: false, senderId: { in: peerIds } },
         _count: { _all: true },
       }),
+      me?.role === UserRole.ADMIN
+        ? Promise.resolve(null)
+        : this.contacts(userId),
     ]);
 
+    const allowedIds =
+      allowed === null
+        ? new Set(peerIds)
+        : new Set(allowed.map((u) => u.id));
+    const peerById = new Map(peers.map((p) => [p.id, p]));
     const unreadBySender = new Map(
       unreadGroups.map((g) => [g.senderId, g._count._all]),
     );
 
-    const byPeer = new Map<
-      string,
-      {
-        peer: { id: string; firstName: string; lastName: string; role: string };
-        lastMessage: (typeof messages)[number];
-        unreadCount: number;
-      }
-    >();
-
-    for (const message of messages) {
-      const peer =
-        message.senderId === userId ? message.receiver : message.sender;
-      if (!allowedIds.has(peer.id)) continue;
-      if (byPeer.has(peer.id)) continue;
-      byPeer.set(peer.id, {
-        peer,
-        lastMessage: message,
-        unreadCount: unreadBySender.get(peer.id) ?? 0,
-      });
-    }
-
-    return Array.from(byPeer.values()).map((item) => ({
-      peerId: item.peer.id,
-      peer: item.peer,
-      preview: this.previewOf(item.lastMessage),
-      lastMessageAt: item.lastMessage.createdAt,
-      unreadCount: item.unreadCount,
-      lastMessage: item.lastMessage,
-    }));
+    return lastRows
+      .filter((row) => allowedIds.has(row.peer_id) && peerById.has(row.peer_id))
+      .map((row) => {
+        const peer = peerById.get(row.peer_id)!;
+        const lastMessage = {
+          id: row.id,
+          senderId: row.senderId,
+          receiverId: row.receiverId,
+          subject: row.subject,
+          body: row.body,
+          kind: row.kind,
+          mediaUrl: row.mediaUrl,
+          mediaMime: row.mediaMime,
+          isRead: row.isRead,
+          readAt: row.readAt,
+          createdAt: row.createdAt,
+          sender:
+            row.senderId === userId
+              ? { id: userId, firstName: '', lastName: '', role: '' }
+              : peer,
+          receiver:
+            row.receiverId === userId
+              ? { id: userId, firstName: '', lastName: '', role: '' }
+              : peer,
+        };
+        return {
+          peerId: peer.id,
+          peer,
+          preview: this.previewOf(lastMessage),
+          lastMessageAt: row.createdAt,
+          unreadCount: unreadBySender.get(peer.id) ?? 0,
+          lastMessage,
+        };
+      })
+      .sort(
+        (a, b) =>
+          new Date(b.lastMessageAt).getTime() -
+          new Date(a.lastMessageAt).getTime(),
+      );
   }
 
   async unreadCount(userId: string) {
@@ -406,7 +460,7 @@ export class MessagesService {
   }
 
   async markThreadRead(userId: string, peerId: string) {
-    await this.prisma.message.updateMany({
+    const result = await this.prisma.message.updateMany({
       where: {
         senderId: peerId,
         receiverId: userId,
@@ -415,6 +469,6 @@ export class MessagesService {
       data: { isRead: true, readAt: new Date() },
     });
     this.emitRead({ readerId: userId, senderId: peerId });
-    return this.thread(userId, peerId);
+    return { marked: result.count, peerId };
   }
 }
