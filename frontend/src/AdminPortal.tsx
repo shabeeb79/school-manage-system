@@ -42,6 +42,7 @@ import {
 import { MAX_MEDIA_BYTES, mediaUrl } from './lib/media';
 import { startPortalNotifications } from './lib/notifications';
 import { useKeepAlivePages } from './lib/keepAlive';
+import { readLastPage, writeLastPage } from './lib/portalSession';
 import { useToast } from './lib/toast';
 import {
   formatUnreadBadge,
@@ -2553,20 +2554,24 @@ const PAGES: Record<Exclude<PageId, 'messages'>, () => ReactNode> = {
 
 export default function AdminPortal() {
   const { user, logout } = useAuth();
-  const [page, setPage] = useState<PageId>('dashboard');
+  const pageIds = NAV_ITEMS.map((item) => item.id);
+  const [page, setPage] = useState<PageId>(() =>
+    readLastPage('admin', pageIds, 'dashboard'),
+  );
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [unread, setUnread] = useState<UnreadCounts>({
     announcements: 0,
     assignments: 0,
     messages: 0,
   });
-  const { visited, epoch } = useKeepAlivePages(page, 'dashboard');
+  const { visited, epoch } = useKeepAlivePages(page, page);
 
   const displayName = user ? `${user.firstName} ${user.lastName}` : 'Divya Menon';
   const displayRole = user?.role === 'ADMIN' ? 'Administrator' : user?.role ?? 'Administrator';
 
   const goTo = (id: PageId) => {
     setPage(id);
+    writeLastPage('admin', id);
     setDrawerOpen(false);
   };
 

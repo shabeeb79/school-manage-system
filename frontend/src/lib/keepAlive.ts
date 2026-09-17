@@ -2,7 +2,8 @@ import { useEffect, useState } from 'react';
 import { subscribeApiCacheCleared } from '../api/client';
 
 /**
- * Keeps every visited page mounted so navigating away/back does not reload.
+ * Keeps visited pages mounted so navigating away/back does not reload.
+ * On browser refresh only the last-viewed page starts mounted (see portalSession).
  * After a create/update/delete (API cache clear), inactive pages remount the
  * next time you open them. The active page should call load() itself.
  */

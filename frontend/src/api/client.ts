@@ -1,10 +1,18 @@
 import axios, { type AxiosRequestConfig, type AxiosResponse } from 'axios';
+import {
+  bootstrapPortalSession,
+  clearPersistedApiCache,
+  readPersistedApiCache,
+  writePersistedApiCache,
+} from '../lib/portalSession';
 
 declare module 'axios' {
   export interface AxiosRequestConfig {
     skipCache?: boolean;
   }
 }
+
+bootstrapPortalSession();
 
 const api = axios.create({
   baseURL: import.meta.env.VITE_API_URL || 'http://localhost:3000/api',
@@ -20,6 +28,15 @@ type CacheEntry = {
 const getCache = new Map<string, CacheEntry>();
 const inflight = new Map<string, Promise<AxiosResponse>>();
 
+const hydrated = readPersistedApiCache();
+if (hydrated) {
+  for (const [key, value] of hydrated) {
+    if (value && typeof value === 'object' && 'data' in (value as object)) {
+      getCache.set(key, value as CacheEntry);
+    }
+  }
+}
+
 type CacheableConfig = AxiosRequestConfig & {
   /** Force a network request and refresh the cache entry. */
   skipCache?: boolean;
@@ -27,6 +44,14 @@ type CacheableConfig = AxiosRequestConfig & {
 
 function cacheKey(url: string, params?: unknown) {
   return `${url}::${JSON.stringify(params ?? null)}`;
+}
+
+let persistTimer: ReturnType<typeof setTimeout> | null = null;
+function schedulePersistCache() {
+  if (persistTimer) clearTimeout(persistTimer);
+  persistTimer = setTimeout(() => {
+    writePersistedApiCache([...getCache.entries()]);
+  }, 250);
 }
 
 /** Paths that must always hit the network (badges / live messaging). */
@@ -45,6 +70,7 @@ function shouldBypassCache(url: string, config?: CacheableConfig) {
 export function clearApiCache() {
   getCache.clear();
   inflight.clear();
+  clearPersistedApiCache();
   if (typeof window !== 'undefined') {
     window.dispatchEvent(new Event('school:api-cache-cleared'));
   }
@@ -71,6 +97,7 @@ export function invalidateApiCache(urlPrefix?: string) {
       inflight.delete(key);
     }
   }
+  schedulePersistCache();
 }
 
 api.interceptors.request.use((config) => {
@@ -151,6 +178,7 @@ api.get = ((url: string, config?: CacheableConfig) => {
         statusText: res.statusText,
         headers: res.headers,
       });
+      schedulePersistCache();
       return res;
     })
     .finally(() => {

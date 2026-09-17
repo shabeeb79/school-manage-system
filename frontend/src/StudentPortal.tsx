@@ -28,6 +28,7 @@ import {
 import { MAX_ASSIGNMENT_MEDIA_BYTES, mediaUrl } from './lib/media';
 import { startPortalNotifications } from './lib/notifications';
 import { useKeepAlivePages } from './lib/keepAlive';
+import { readLastPage, writeLastPage } from './lib/portalSession';
 import { useToast } from './lib/toast';
 import { teachingSubjectLabel } from './lib/subjects';
 import {
@@ -1479,13 +1480,16 @@ function NavCount({ count }: { count: number }) {
 
 export default function StudentPortal() {
   const { user, logout } = useAuth();
-  const [page, setPage] = useState<PageId>('dashboard');
+  const pageIds = NAV_ITEMS.map((item) => item.id);
+  const [page, setPage] = useState<PageId>(() =>
+    readLastPage('student', pageIds, 'dashboard'),
+  );
   const [unread, setUnread] = useState<UnreadCounts>({
     announcements: 0,
     assignments: 0,
     messages: 0,
   });
-  const { visited, epoch } = useKeepAlivePages(page, 'dashboard');
+  const { visited, epoch } = useKeepAlivePages(page, page);
 
   const firstName = user?.firstName ?? STUDENT.firstName;
   const displayName = user ? `${user.firstName} ${user.lastName}` : STUDENT.name;
@@ -1495,6 +1499,11 @@ export default function StudentPortal() {
     const section = schoolClass.section?.trim();
     return section ? `${schoolClass.name} - ${section}` : schoolClass.name;
   })();
+
+  const goTo = (id: PageId) => {
+    setPage(id);
+    writeLastPage('student', id);
+  };
 
   useEffect(() => {
     return startPortalNotifications({
@@ -1534,7 +1543,7 @@ export default function StudentPortal() {
                 <button
                   key={item.id}
                   type="button"
-                  onClick={() => setPage(item.id)}
+                  onClick={() => goTo(item.id)}
                   className={cn(
                     'inline-flex items-center rounded-full px-3 py-2 text-sm transition-colors',
                     active
@@ -1556,9 +1565,9 @@ export default function StudentPortal() {
               announcements={unread.announcements}
               messages={unread.messages}
               assignments={unread.assignments}
-              onOpenAnnouncements={() => setPage('announcements')}
-              onOpenMessages={() => setPage('messages')}
-              onOpenAssignments={() => setPage('assignments')}
+              onOpenAnnouncements={() => goTo('announcements')}
+              onOpenMessages={() => goTo('messages')}
+              onOpenAssignments={() => goTo('assignments')}
             />
             <Avatar name={displayName} size="sm" />
             <IconButton label="Sign out" onClick={logout}>
@@ -1577,7 +1586,7 @@ export default function StudentPortal() {
                 <button
                   key={item.id}
                   type="button"
-                  onClick={() => setPage(item.id)}
+                  onClick={() => goTo(item.id)}
                   className={cn(
                     'relative inline-flex h-10 shrink-0 items-center gap-1.5 rounded-full px-3 text-xs font-medium whitespace-nowrap',
                     active ? 'bg-indigo-600 text-white' : 'bg-violet-50 text-gray-500',
@@ -1611,7 +1620,7 @@ export default function StudentPortal() {
                 <DashboardPage
                   firstName={firstName}
                   className={classLabel}
-                  onOpenAssignments={() => setPage('assignments')}
+                  onOpenAssignments={() => goTo('assignments')}
                 />
               </div>
             );
