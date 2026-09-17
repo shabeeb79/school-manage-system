@@ -7,6 +7,7 @@ import {
 import { MessageKind, Prisma, UserRole } from '@prisma/client';
 import { unlinkSync, existsSync } from 'fs';
 import { join } from 'path';
+import { listTake } from '../common/pagination';
 import { PrismaService } from '../prisma/prisma.service';
 import { SendMessageDto } from './dto/send-message.dto';
 import { MessagesRealtimeService } from './messages-realtime.service';
@@ -275,6 +276,7 @@ export class MessagesService {
         sender: { select: userSelect },
       },
       orderBy: { createdAt: 'desc' },
+      take: listTake(undefined, 100, 200),
     });
   }
 
@@ -285,6 +287,7 @@ export class MessagesService {
         receiver: { select: userSelect },
       },
       orderBy: { createdAt: 'desc' },
+      take: listTake(undefined, 100, 200),
     });
   }
 
@@ -301,13 +304,25 @@ export class MessagesService {
     const allowed = await this.contacts(userId);
     const allowedIds = new Set(allowed.map((u) => u.id));
 
-    const messages = await this.prisma.message.findMany({
-      where: {
-        OR: [{ senderId: userId }, { receiverId: userId }],
-      },
-      include: this.includePeers(),
-      orderBy: { createdAt: 'desc' },
-    });
+    const [messages, unreadGroups] = await Promise.all([
+      this.prisma.message.findMany({
+        where: {
+          OR: [{ senderId: userId }, { receiverId: userId }],
+        },
+        include: this.includePeers(),
+        orderBy: { createdAt: 'desc' },
+        take: listTake(undefined, 500, 1000),
+      }),
+      this.prisma.message.groupBy({
+        by: ['senderId'],
+        where: { receiverId: userId, isRead: false },
+        _count: { _all: true },
+      }),
+    ]);
+
+    const unreadBySender = new Map(
+      unreadGroups.map((g) => [g.senderId, g._count._all]),
+    );
 
     const byPeer = new Map<
       string,
@@ -322,17 +337,12 @@ export class MessagesService {
       const peer =
         message.senderId === userId ? message.receiver : message.sender;
       if (!allowedIds.has(peer.id)) continue;
-      const existing = byPeer.get(peer.id);
-      if (!existing) {
-        byPeer.set(peer.id, {
-          peer,
-          lastMessage: message,
-          unreadCount:
-            message.receiverId === userId && !message.isRead ? 1 : 0,
-        });
-      } else if (message.receiverId === userId && !message.isRead) {
-        existing.unreadCount += 1;
-      }
+      if (byPeer.has(peer.id)) continue;
+      byPeer.set(peer.id, {
+        peer,
+        lastMessage: message,
+        unreadCount: unreadBySender.get(peer.id) ?? 0,
+      });
     }
 
     return Array.from(byPeer.values()).map((item) => ({
@@ -369,10 +379,11 @@ export class MessagesService {
         ],
       },
       include: this.includePeers(),
-      orderBy: { createdAt: 'asc' },
+      orderBy: { createdAt: 'desc' },
+      take: listTake(undefined, 200, 300),
     });
 
-    return { peer, messages };
+    return { peer, messages: messages.reverse() };
   }
 
   async markRead(id: string, userId: string) {

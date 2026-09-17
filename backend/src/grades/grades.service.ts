@@ -5,6 +5,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { TeachingSubject, UserRole } from '@prisma/client';
+import { listTake } from '../common/pagination';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateGradeDto } from './dto/create-grade.dto';
 import { UpsertStaffMarkDto } from './dto/upsert-staff-mark.dto';
@@ -61,6 +62,7 @@ export class GradesService {
         },
       },
       orderBy: { createdAt: 'desc' },
+      take: listTake(undefined, 200, 500),
     });
   }
 

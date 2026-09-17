@@ -327,6 +327,44 @@ export function OverflowMenu() {
   );
 }
 
+export function Skeleton({ className }: { className?: string }) {
+  return (
+    <div
+      className={cn('animate-pulse rounded-md bg-gray-200/80', className)}
+      aria-hidden
+    />
+  );
+}
+
+export function PortalSkeleton() {
+  return (
+    <div className="flex min-h-dvh bg-gray-50">
+      <aside className="hidden w-64 shrink-0 border-r border-gray-200 bg-white p-4 md:block">
+        <Skeleton className="mb-6 h-8 w-40" />
+        <div className="space-y-3">
+          {Array.from({ length: 8 }).map((_, i) => (
+            <Skeleton key={i} className="h-9 w-full" />
+          ))}
+        </div>
+      </aside>
+      <main className="flex-1 p-4 sm:p-6">
+        <Skeleton className="mb-4 h-8 w-48" />
+        <Skeleton className="mb-6 h-4 w-72 max-w-full" />
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          {Array.from({ length: 6 }).map((_, i) => (
+            <Skeleton key={i} className="h-28 w-full" />
+          ))}
+        </div>
+        <div className="mt-6 space-y-3">
+          {Array.from({ length: 5 }).map((_, i) => (
+            <Skeleton key={i} className="h-12 w-full" />
+          ))}
+        </div>
+      </main>
+    </div>
+  );
+}
+
 export function PostMedia({
   src,
   mediaType,
@@ -360,6 +398,8 @@ export function PostMedia({
         <img
           src={src}
           alt=""
+          loading="lazy"
+          decoding="async"
           className="h-auto max-h-56 w-auto max-w-full object-contain sm:max-h-72 md:max-h-80"
         />
       )}

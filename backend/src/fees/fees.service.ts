@@ -1,5 +1,6 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { FeeStatus, UserRole } from '@prisma/client';
+import { listTake } from '../common/pagination';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateFeeDto, PayFeeDto } from './dto/fee.dto';
 
@@ -39,6 +40,7 @@ export class FeesService {
         },
       },
       orderBy: { createdAt: 'desc' },
+      take: listTake(undefined, 100, 200),
     });
   }
 

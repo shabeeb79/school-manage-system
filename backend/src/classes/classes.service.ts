@@ -21,14 +21,18 @@ export class ClassesService {
           },
         },
         staff: {
-          include: {
+          select: {
+            id: true,
             user: { select: { firstName: true, lastName: true } },
           },
         },
         classAssignments: {
-          include: {
+          select: {
+            id: true,
+            schoolClassId: true,
             staffProfile: {
-              include: {
+              select: {
+                id: true,
                 user: { select: { firstName: true, lastName: true } },
               },
             },

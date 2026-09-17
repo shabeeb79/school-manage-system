@@ -5,6 +5,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { LeaveStatus, UserRole } from '@prisma/client';
+import { listTake } from '../common/pagination';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateLeaveDto, ReviewLeaveDto } from './dto/leave.dto';
 
@@ -74,6 +75,7 @@ export class LeaveService {
           },
         },
         orderBy: { createdAt: 'desc' },
+        take: listTake(undefined, 100, 200),
       });
     }
 
@@ -103,6 +105,7 @@ export class LeaveService {
           },
         },
         orderBy: { createdAt: 'desc' },
+        take: listTake(undefined, 100, 200),
       });
     }
 
@@ -115,6 +118,7 @@ export class LeaveService {
         },
       },
       orderBy: { createdAt: 'desc' },
+      take: listTake(undefined, 100, 200),
     });
   }
 

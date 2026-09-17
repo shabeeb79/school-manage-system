@@ -95,6 +95,8 @@ model User {
   assignmentReads        AssignmentRead[]
   timetablePeriods       TimetablePeriod[]
 
+  @@index([role, lastName])
+  @@index([isActive])
   @@map("users")
 }
 
@@ -131,6 +133,7 @@ model StudentProfile {
   user        User         @relation(fields: [userId], references: [id], onDelete: Cascade)
   schoolClass SchoolClass? @relation(fields: [schoolClassId], references: [id], onDelete: SetNull)
 
+  @@index([schoolClassId])
   @@map("student_profiles")
 }
 
@@ -149,6 +152,7 @@ model StaffProfile {
   assignedClass    SchoolClass?           @relation(fields: [assignedClassId], references: [id], onDelete: SetNull)
   classAssignments StaffClassAssignment[]
 
+  @@index([assignedClassId])
   @@map("staff_profiles")
 }
 
@@ -162,6 +166,7 @@ model StaffClassAssignment {
   schoolClass  SchoolClass  @relation(fields: [schoolClassId], references: [id], onDelete: Cascade)
 
   @@unique([staffProfileId, schoolClassId])
+  @@index([schoolClassId])
   @@map("staff_class_assignments")
 }
 
@@ -183,6 +188,10 @@ model Post {
   targets     PostTarget[]
   reads       PostRead[]
 
+  @@index([isPublished, createdAt])
+  @@index([authorId])
+  @@index([targetClassId])
+  @@index([audience])
   @@map("posts")
 }
 
@@ -209,6 +218,7 @@ model PostTarget {
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([postId, userId])
+  @@index([userId])
   @@map("post_targets")
 }
 
@@ -227,6 +237,8 @@ model Attendance {
   markedBy    User?        @relation("AttendanceMarker", fields: [markedById], references: [id], onDelete: SetNull)
 
   @@unique([studentId, date])
+  @@index([schoolClassId, date])
+  @@index([date])
   @@map("attendance")
 }
 
@@ -247,6 +259,9 @@ model Grade {
   student    User  @relation("GradeStudent", fields: [studentId], references: [id], onDelete: Cascade)
   recordedBy User? @relation("GradeRecorder", fields: [recordedById], references: [id], onDelete: SetNull)
 
+  @@index([studentId, examName])
+  @@index([studentId, subject])
+  @@index([term])
   @@map("grades")
 }
 
@@ -267,6 +282,8 @@ model Fee {
   student   User  @relation("FeeStudent", fields: [studentId], references: [id], onDelete: Cascade)
   createdBy User? @relation("FeeCreator", fields: [createdById], references: [id], onDelete: SetNull)
 
+  @@index([studentId, createdAt])
+  @@index([status, dueDate])
   @@map("fees")
 }
 
@@ -287,6 +304,8 @@ model Assignment {
   submissions AssignmentSubmission[]
   reads       AssignmentRead[]
 
+  @@index([schoolClassId, dueDate])
+  @@index([createdById])
   @@map("assignments")
 }
 
@@ -323,6 +342,7 @@ model AssignmentSubmission {
   student    User       @relation("SubmissionStudent", fields: [studentId], references: [id], onDelete: Cascade)
 
   @@unique([assignmentId, studentId])
+  @@index([studentId])
   @@map("assignment_submissions")
 }
 
@@ -342,6 +362,8 @@ model LeaveRequest {
   requester  User  @relation("LeaveRequester", fields: [requesterId], references: [id], onDelete: Cascade)
   reviewedBy User? @relation("LeaveReviewer", fields: [reviewedById], references: [id], onDelete: SetNull)
 
+  @@index([requesterId, createdAt])
+  @@index([status, createdAt])
   @@map("leave_requests")
 }
 

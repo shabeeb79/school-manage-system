@@ -1105,6 +1105,8 @@ function AssignmentsPage() {
               ) : (
                 <img
                   alt="Your submission"
+                  loading="lazy"
+                  decoding="async"
                   className="max-h-72 w-full object-contain"
                   src={mediaUrl(submission.fileUrl)}
                 />

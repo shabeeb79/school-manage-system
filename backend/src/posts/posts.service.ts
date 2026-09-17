@@ -1,7 +1,8 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
-import { PostAudience, UserRole } from '@prisma/client';
+import { PostAudience, Prisma, UserRole } from '@prisma/client';
 import { unlink } from 'fs/promises';
 import { join } from 'path';
+import { listTake } from '../common/pagination';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreatePostDto } from './dto/create-post.dto';
 
@@ -54,6 +55,60 @@ export class PostsService {
     });
   }
 
+  private feedVisibilityWhere(user: {
+    id: string;
+    role: UserRole;
+    studentProfile?: { schoolClassId?: string | null } | null;
+    staffProfile?: {
+      assignedClassId?: string | null;
+      classAssignments?: { schoolClassId: string }[];
+    } | null;
+  }): Prisma.PostWhereInput {
+    const staffClassIds = [
+      user.staffProfile?.assignedClassId,
+      ...(user.staffProfile?.classAssignments ?? []).map((a) => a.schoolClassId),
+    ].filter((id): id is string => Boolean(id));
+    const studentClassId = user.studentProfile?.schoolClassId ?? undefined;
+
+    const audienceOr: Prisma.PostWhereInput[] = [
+      { audience: PostAudience.ALL },
+      {
+        audience: PostAudience.CUSTOM,
+        OR: [
+          { authorId: user.id },
+          { targets: { some: { userId: user.id } } },
+        ],
+      },
+    ];
+
+    if (user.role === UserRole.ADMIN) {
+      audienceOr.push(
+        { audience: PostAudience.ADMIN },
+        { audience: PostAudience.STAFF },
+        { audience: PostAudience.STUDENT },
+        { audience: PostAudience.CLASS },
+      );
+    } else if (user.role === UserRole.STAFF) {
+      audienceOr.push({ audience: PostAudience.STAFF });
+      if (staffClassIds.length) {
+        audienceOr.push({
+          audience: PostAudience.CLASS,
+          targetClassId: { in: staffClassIds },
+        });
+      }
+    } else {
+      audienceOr.push({ audience: PostAudience.STUDENT });
+      if (studentClassId) {
+        audienceOr.push({
+          audience: PostAudience.CLASS,
+          targetClassId: studentClassId,
+        });
+      }
+    }
+
+    return { isPublished: true, OR: audienceOr };
+  }
+
   async feed(user: {
     id: string;
     role: UserRole;
@@ -64,77 +119,28 @@ export class PostsService {
     } | null;
   }) {
     const posts = await this.prisma.post.findMany({
-      where: { isPublished: true },
+      where: this.feedVisibilityWhere(user),
       include: {
         author: {
           select: { id: true, firstName: true, lastName: true, role: true },
         },
-        targetClass: true,
-        targets: true,
+        targetClass: {
+          select: { id: true, name: true, section: true, academicYear: true },
+        },
+        targets: { select: { userId: true } },
         reads: {
           where: { userId: user.id },
           select: { id: true },
         },
       },
       orderBy: { createdAt: 'desc' },
+      take: listTake(undefined, 100, 200),
     });
 
-    return posts
-      .filter((post) => this.isVisibleTo(post, user))
-      .map(({ reads, ...post }) => ({
-        ...post,
-        isUnread: post.authorId !== user.id && reads.length === 0,
-      }));
-  }
-
-  private isVisibleTo(
-    post: {
-      audience: PostAudience;
-      targetClassId: string | null;
-      authorId: string;
-      targets: { userId: string }[];
-    },
-    user: {
-      id: string;
-      role: UserRole;
-      studentProfile?: { schoolClassId?: string | null } | null;
-      staffProfile?: {
-        assignedClassId?: string | null;
-        classAssignments?: { schoolClassId: string }[];
-      } | null;
-    },
-  ) {
-    switch (post.audience) {
-      case PostAudience.ALL:
-        return true;
-      case PostAudience.ADMIN:
-        return user.role === UserRole.ADMIN;
-      case PostAudience.STAFF:
-        return user.role === UserRole.STAFF || user.role === UserRole.ADMIN;
-      case PostAudience.STUDENT:
-        return user.role === UserRole.STUDENT || user.role === UserRole.ADMIN;
-      case PostAudience.CLASS: {
-        if (user.role === UserRole.ADMIN) return true;
-        if (user.studentProfile?.schoolClassId === post.targetClassId) {
-          return true;
-        }
-        const staffClassIds = [
-          user.staffProfile?.assignedClassId,
-          ...(user.staffProfile?.classAssignments ?? []).map(
-            (a) => a.schoolClassId,
-          ),
-        ].filter(Boolean);
-        return staffClassIds.includes(post.targetClassId ?? undefined);
-      }
-      case PostAudience.CUSTOM:
-        return (
-          user.role === UserRole.ADMIN ||
-          post.authorId === user.id ||
-          post.targets.some((t) => t.userId === user.id)
-        );
-      default:
-        return false;
-    }
+    return posts.map(({ reads, ...post }) => ({
+      ...post,
+      isUnread: post.authorId !== user.id && reads.length === 0,
+    }));
   }
 
   async unreadCount(user: {
@@ -177,7 +183,9 @@ export class PostsService {
         author: {
           select: { id: true, firstName: true, lastName: true, role: true },
         },
-        targetClass: true,
+        targetClass: {
+          select: { id: true, name: true, section: true, academicYear: true },
+        },
         targets: {
           include: {
             user: { select: { id: true, firstName: true, lastName: true } },
@@ -185,6 +193,7 @@ export class PostsService {
         },
       },
       orderBy: { createdAt: 'desc' },
+      take: listTake(undefined, 100, 200),
     });
   }
 

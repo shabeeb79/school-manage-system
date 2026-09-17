@@ -281,6 +281,8 @@ function MessageBubble({
             <img
               src={src}
               alt={caption || 'Photo'}
+              loading="lazy"
+              decoding="async"
               className={cn(
                 'max-h-64 w-full object-cover',
                 caption ? 'rounded-xl' : 'rounded-[0.85rem]',

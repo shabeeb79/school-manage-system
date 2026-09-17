@@ -7,6 +7,7 @@ import {
 import { TeachingSubject, UserRole } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
 import { PrismaService } from '../prisma/prisma.service';
+import { listTake } from '../common/pagination';
 import {
   assertSubjectAvailableForClasses,
   assignedClassIdsFromStaff,
@@ -47,6 +48,7 @@ export class UsersService {
         staffProfile: { include: staffProfileInclude },
       },
       orderBy: { lastName: 'asc' },
+      take: listTake(undefined, 200, 500),
     });
   }
 

@@ -7,6 +7,7 @@ import {
 import { SubmissionStatus, UserRole } from '@prisma/client';
 import { existsSync, unlinkSync } from 'fs';
 import { join } from 'path';
+import { listTake } from '../common/pagination';
 import { PrismaService } from '../prisma/prisma.service';
 import {
   CreateAssignmentDto,
@@ -91,7 +92,9 @@ export class AssignmentsService {
     const assignments = await this.prisma.assignment.findMany({
       where,
       include: {
-        schoolClass: true,
+        schoolClass: {
+          select: { id: true, name: true, section: true, academicYear: true },
+        },
         createdBy: {
           select: {
             id: true,
@@ -115,6 +118,7 @@ export class AssignmentsService {
                   },
                 },
                 orderBy: { submittedAt: 'desc' },
+                take: listTake(undefined, 100, 200),
               },
         _count: { select: { submissions: true } },
         reads:
@@ -123,6 +127,7 @@ export class AssignmentsService {
             : false,
       },
       orderBy: { dueDate: 'asc' },
+      take: listTake(undefined, 100, 200),
     });
 
     if (user.role !== UserRole.STUDENT) {

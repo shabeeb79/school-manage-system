@@ -2,16 +2,22 @@ import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
 import { NestExpressApplication } from '@nestjs/platform-express';
 import { join } from 'path';
+import compression from 'compression';
 import { AppModule } from './app.module';
 
 async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
+  app.use(compression());
   app.enableCors({
     origin: ['https://school-manage-system.contactzylust.workers.dev'],
     credentials: true,
   });
   app.useStaticAssets(join(process.cwd(), 'uploads'), {
     prefix: '/uploads/',
+    maxAge: '7d',
+    setHeaders: (res) => {
+      res.setHeader('Cache-Control', 'public, max-age=604800, immutable');
+    },
   });
   app.setGlobalPrefix('api');
   app.useGlobalPipes(

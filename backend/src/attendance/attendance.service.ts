@@ -3,6 +3,7 @@ import {
   Injectable,
 } from '@nestjs/common';
 import { UserRole } from '@prisma/client';
+import { listTake } from '../common/pagination';
 import { PrismaService } from '../prisma/prisma.service';
 import { MarkAttendanceDto } from './dto/mark-attendance.dto';
 import { resolveClassTeacherClassId } from '../users/staff-classes';
@@ -129,12 +130,15 @@ export class AttendanceService {
             studentProfile: { select: { studentId: true } },
           },
         },
-        schoolClass: true,
+        schoolClass: {
+          select: { id: true, name: true, section: true, academicYear: true },
+        },
         markedBy: {
           select: { id: true, firstName: true, lastName: true },
         },
       },
       orderBy: [{ date: 'desc' }, { student: { lastName: 'asc' } }],
+      take: listTake(undefined, 200, 500),
     });
   }
 }
