@@ -12,6 +12,7 @@ import { AssignmentsModule } from './assignments/assignments.module';
 import { LeaveModule } from './leave/leave.module';
 import { MessagesModule } from './messages/messages.module';
 import { TimetableModule } from './timetable/timetable.module';
+import { HealthController } from './health.controller';
 
 @Module({
   imports: [
@@ -29,5 +30,6 @@ import { TimetableModule } from './timetable/timetable.module';
     MessagesModule,
     TimetableModule,
   ],
+  controllers: [HealthController],
 })
 export class AppModule {}

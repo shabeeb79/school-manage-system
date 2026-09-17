@@ -1,0 +1,23 @@
+services:
+  - type: web
+    name: school-manage-api
+    runtime: node
+    rootDir: backend
+    buildCommand: npm run render:build
+    startCommand: npm run render:start
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        fromDatabase:
+          name: school-manage-db
+          property: connectionString
+      - key: JWT_SECRET
+        generateValue: true
+      - key: JWT_EXPIRES_IN
+        value: 7d
+
+databases:
+  - name: school-manage-db
+    plan: free
