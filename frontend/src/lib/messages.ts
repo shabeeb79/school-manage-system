@@ -83,6 +83,7 @@ export async function fetchContacts() {
 export async function fetchThread(peerId: string) {
   const { data } = await api.get<{ peer: MessagePeer; messages: ApiMessage[] }>(
     `/messages/with/${peerId}`,
+    { skipCache: true },
   );
   return data;
 }

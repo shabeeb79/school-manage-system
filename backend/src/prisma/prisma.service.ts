@@ -16,7 +16,7 @@ function prismaDatabaseUrl(raw = process.env.DATABASE_URL) {
     // Allow a small pool so JWT + handler queries are not fully serialized.
     // Keep modest under Supabase transaction pooler.
     if (!url.searchParams.has('connection_limit')) {
-      const limit = process.env.PRISMA_CONNECTION_LIMIT || '5';
+      const limit = process.env.PRISMA_CONNECTION_LIMIT || '8';
       url.searchParams.set('connection_limit', limit);
     }
     return url.toString();

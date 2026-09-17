@@ -395,19 +395,36 @@ export default function MessagesChat({
   };
 
   const openThread = async (peerId: string) => {
-    setActivePeerId(peerId);
-    activePeerIdRef.current = peerId;
+    setError('');
     setMobileShowChat(true);
     setComposeOpen(false);
-    setError('');
+
+    const knownPeer =
+      conversations.find((c) => c.peerId === peerId)?.peer ||
+      contacts.find((c) => c.id === peerId) ||
+      null;
+
+    setActivePeerId(peerId);
+    activePeerIdRef.current = peerId;
+    if (knownPeer) {
+      setPeer(knownPeer);
+      setMessages([]);
+    }
+
     try {
-      await markThreadRead(peerId);
       const data = await fetchThread(peerId);
       setPeer(data.peer);
       setMessages(data.messages);
-      await loadConversations();
+      void markThreadRead(peerId)
+        .then(() => loadConversations())
+        .catch(() => undefined);
     } catch (err) {
       setError(apiErrorMessage(err, 'Could not open conversation.'));
+      if (!knownPeer) {
+        setActivePeerId(null);
+        activePeerIdRef.current = null;
+        setPeer(null);
+      }
     }
   };
 
@@ -729,6 +746,11 @@ export default function MessagesChat({
         </div>
 
         <div className={cn('min-w-0 flex-1 flex-col', mobileShowChat ? 'flex' : 'hidden md:flex')}>
+          {error && (!activePeerId || !peer) && (
+            <p className="border-b border-red-100 bg-red-50 px-3 py-2 text-sm text-red-600 md:px-4">
+              {error}
+            </p>
+          )}
           {!activePeerId || !peer ? (
             <div className="flex flex-1 items-center justify-center p-6 text-sm text-gray-400">
               Select a conversation or start a new one.

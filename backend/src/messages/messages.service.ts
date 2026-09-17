@@ -417,7 +417,18 @@ export class MessagesService {
   }
 
   async thread(userId: string, peerId: string) {
-    await this.assertCanMessage(userId, peerId);
+    const priorCount = await this.prisma.message.count({
+      where: {
+        OR: [
+          { senderId: userId, receiverId: peerId },
+          { senderId: peerId, receiverId: userId },
+        ],
+      },
+    });
+    // Allow reading existing history even if messaging rules changed.
+    if (priorCount === 0) {
+      await this.assertCanMessage(userId, peerId);
+    }
 
     const peer = await this.prisma.user.findUnique({
       where: { id: peerId },

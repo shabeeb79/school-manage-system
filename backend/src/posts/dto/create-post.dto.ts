@@ -45,6 +45,9 @@ export class CreatePostDto {
   audience: PostAudience;
 
   @IsOptional()
+  @Transform(({ value }) =>
+    value === '' || value === null || value === undefined ? undefined : value,
+  )
   @IsUUID()
   targetClassId?: string;
 

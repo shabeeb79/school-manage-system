@@ -45,9 +45,12 @@ export class AssignmentsController {
   @Post()
   @Roles(UserRole.ADMIN, UserRole.STAFF)
   create(
-    @CurrentUser() user: { id: string },
+    @CurrentUser() user: { id: string; role: UserRole },
     @Body() dto: CreateAssignmentDto,
   ) {
+    if (user.role === UserRole.ADMIN) {
+      return this.assignments.create(user.id, dto);
+    }
     return this.assignments.createForStaff(user.id, dto);
   }
 

@@ -34,7 +34,9 @@ function shouldBypassCache(url: string, config?: CacheableConfig) {
   if (config?.skipCache) return true;
   const path = url.split('?')[0];
   if (path.includes('unread-count')) return true;
-  if (/\/messages\/(conversations|thread|inbox|sent)(\/|$)/.test(path)) {
+  if (
+    /\/messages\/(conversations|with|inbox|sent|contacts)(\/|$)/.test(path)
+  ) {
     return true;
   }
   return false;

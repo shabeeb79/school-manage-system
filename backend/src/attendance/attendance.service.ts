@@ -115,7 +115,7 @@ export class AttendanceService {
           ? params.staffHomeroomId
           : await resolveClassTeacherClassId(this.prisma, params.userId);
       if (!homeroomId) {
-        where.schoolClassId = '__none__';
+        return [];
       } else if (params.schoolClassId && params.schoolClassId !== homeroomId) {
         throw new ForbiddenException(
           'You can only view attendance for your class-teacher class',

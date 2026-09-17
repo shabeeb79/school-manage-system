@@ -71,13 +71,29 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     const cached = this.userCache.get<Record<string, unknown>>(payload.sub);
     if (cached) return cached;
 
-    const user = await this.prisma.user.findUnique({
-      where: { id: payload.sub },
-      select: authUserSelect,
-    });
-    if (!user || !user.isActive) return null;
+    try {
+      const user = await this.prisma.user.findUnique({
+        where: { id: payload.sub },
+        select: authUserSelect,
+      });
+      if (!user || !user.isActive) return null;
 
-    this.userCache.set(user.id, user);
-    return user;
+      this.userCache.set(user.id, user);
+      return user;
+    } catch {
+      // Transient DB/pool errors should not hard-500 every portal page.
+      // One short retry, then fail closed as unauthenticated.
+      try {
+        const user = await this.prisma.user.findUnique({
+          where: { id: payload.sub },
+          select: authUserSelect,
+        });
+        if (!user || !user.isActive) return null;
+        this.userCache.set(user.id, user);
+        return user;
+      } catch {
+        return null;
+      }
+    }
   }
 }
